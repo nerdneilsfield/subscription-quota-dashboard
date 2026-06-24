@@ -8,7 +8,7 @@
     "client:dev": "vite --host 127.0.0.1",
     "build": "vite build && bun build src/server/main.ts --target=bun --outdir=dist/server",
     "start": "bun dist/server/main.js",
-    "test": "bun test --preload ./tests/setup-dom.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

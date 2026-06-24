@@ -41,7 +41,7 @@ const RANGE_MS: Record<RangeKey, number> = {
   "30d": 2_592_000_000,
 }
 
-export type RefreshRequest = { profileId: string; ip: string }
+export type RefreshRequest = { profileId: string; ip: string; range?: RangeKey }
 
 export type RefreshOutcome =
   | { status: "ok"; payload: DashboardPayload }
@@ -273,10 +273,11 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     const profile = config.profiles.get(req.profileId)
     if (!profile) return { status: "fatal", error: "unknown profile" }
 
+    const range: RangeKey = req.range ?? "24h"
     const paIds = collectVisibleProviderAccounts(req.profileId)
     if (paIds.length === 0) {
       // No provider accounts to refresh: return current payload.
-      const payload = buildPayloadFromStorage(req.profileId, now().toISOString(), "24h")
+      const payload = buildPayloadFromStorage(req.profileId, now().toISOString(), range)
       return { status: "ok", payload }
     }
 
@@ -321,7 +322,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       errors,
     })
 
-    const payload = buildPayloadFromStorage(req.profileId, now().toISOString(), "24h")
+    const payload = buildPayloadFromStorage(req.profileId, now().toISOString(), range)
 
     if (!anyOk && errors.length > 0) {
       // If a stale cache exists for at least one account, serve degraded.

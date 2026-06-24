@@ -13,7 +13,7 @@ export function createManualProvider(): ProviderAdapter {
       return {
         providerAccountId: input.providerAccountId,
         fetchedAt: input.now,
-        staleAfter: input.now,
+        staleAfter: new Date(Date.parse(input.now) + 15 * 60 * 1000).toISOString(),
         metrics,
       }
     },

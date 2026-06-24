@@ -24,6 +24,8 @@ import { buildMetricKey } from "../../src/shared/metric-key"
 
 const NOW_MS = Date.parse("2026-06-25T12:00:00.000Z")
 const NOW_ISO = "2026-06-25T12:00:00.000Z"
+// Mirrors the real provider 15-min staleAfter TTL (spec ~950).
+const STALE_AFTER_ISO = "2026-06-25T12:15:00.000Z"
 const fixedNow = (): Date => new Date(NOW_MS)
 
 function makeStorage(): DashboardStorage {
@@ -94,7 +96,7 @@ function okResult(paId: string, metrics: NormalizedMetric[], history: ProviderHi
   const r: ProviderRefreshResult = {
     providerAccountId: paId,
     fetchedAt: NOW_ISO,
-    staleAfter: NOW_ISO,
+    staleAfter: STALE_AFTER_ISO,
     metrics,
     historyEvents: history,
   }
@@ -449,4 +451,62 @@ test("a snapshot-only metric (no provider-history events) yields snapshot-delta 
   expect(metric.rangeStats!.source).toBe("snapshot-delta")
   expect(metric.rangeStats!.consumption).toBe(50)
   expect(metric.rangeStats!.burnRate).toBeDefined()
+})
+
+// --- Test 10: advancing-clock TTL regression (instant-stale guard) ---
+
+test("advancing the clock by <15min after refresh keeps metrics non-stale (15-min TTL holds)", async () => {
+  let clockMs = NOW_MS
+  const advanceableNow = (): Date => new Date(clockMs)
+  const fake: ProviderAdapter = {
+    type: "poe",
+    async refresh(input) {
+      // Healthy balance (50% used) so the only variable is the staleAfter TTL.
+      return okResult(input.providerAccountId, [balanceMetric(500_000)])
+    },
+  }
+  const config = loadDashboardConfig({
+    providers: [poeProvider("poe-main")],
+    subscriptions: [{ id: "sub-main", name: "Main", providerId: "poe-main", metrics: [pointsMetric("points")] }],
+    profiles: [{ id: "self", name: "Self", viewKey: "k", subscriptionIds: ["sub-main"] }],
+  })
+  const { storage } = spyStorage(makeStorage())
+  const providers = new Map<string, ProviderAdapter>([["poe", fake], ["manual", { type: "manual", async refresh(i) { return okResult(i.providerAccountId, []) } }]])
+  const svc = createRefreshService({ config, storage, providers, now: advanceableNow })
+
+  await svc.refreshProfile({ profileId: "self", ip: "1.1.1.1" })
+
+  // Advance clock by 1 second (well under the 15-min TTL).
+  clockMs += 1_000
+  const payload = svc.getPayload("self", "24h")
+  const status = payload.subscriptions[0]!.metrics[0]!.status
+  expect(status).not.toBe("stale")
+  expect(status).toBe("ok")
+})
+
+test("advancing the clock past the 15-min TTL after refresh marks metrics stale", async () => {
+  let clockMs = NOW_MS
+  const advanceableNow = (): Date => new Date(clockMs)
+  const fake: ProviderAdapter = {
+    type: "poe",
+    async refresh(input) {
+      // Healthy balance (50% used) so staleness is the dominant status.
+      return okResult(input.providerAccountId, [balanceMetric(500_000)])
+    },
+  }
+  const config = loadDashboardConfig({
+    providers: [poeProvider("poe-main")],
+    subscriptions: [{ id: "sub-main", name: "Main", providerId: "poe-main", metrics: [pointsMetric("points")] }],
+    profiles: [{ id: "self", name: "Self", viewKey: "k", subscriptionIds: ["sub-main"] }],
+  })
+  const { storage } = spyStorage(makeStorage())
+  const providers = new Map<string, ProviderAdapter>([["poe", fake], ["manual", { type: "manual", async refresh(i) { return okResult(i.providerAccountId, []) } }]])
+  const svc = createRefreshService({ config, storage, providers, now: advanceableNow })
+
+  await svc.refreshProfile({ profileId: "self", ip: "1.1.1.1" })
+
+  // Advance past the 15-min TTL.
+  clockMs += 16 * 60 * 1000
+  const payload = svc.getPayload("self", "24h")
+  expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("stale")
 })

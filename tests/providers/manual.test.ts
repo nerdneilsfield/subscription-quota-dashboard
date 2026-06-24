@@ -172,7 +172,8 @@ test("manual provider result carries deterministic fetchedAt/staleAfter and no h
   const result = await createManualProvider().refresh(buildInput([metric], now))
   expect(result.providerAccountId).toBe("man-1")
   expect(result.fetchedAt).toBe(now)
-  expect(result.staleAfter).toBe(now)
+  // staleAfter defaults to fetchedAt + 15 min (spec ~950), NOT instant-stale.
+  expect(result.staleAfter).toBe("2026-06-25T00:15:00.000Z")
   expect(result.historyEvents).toBeUndefined()
   expect(result.errors).toBeUndefined()
 })

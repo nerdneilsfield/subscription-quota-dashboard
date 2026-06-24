@@ -586,6 +586,96 @@ test("subscription status is the highest precedence of its metric statuses", () 
   expect(payload.subscriptions[0]!.status).toBe("critical")
 })
 
+// Spec ~918: subscription status escalates from subscription-level cache status/errors.
+test("subscription status escalates to warn when its cache carries provider-level errors (metrics all ok)", () => {
+  const config = makeConfig(
+    baseConfig({
+      subscriptions: [
+        {
+          id: "man-sub", name: "Manual", providerId: "manual-main",
+          // No limit → metric computes ok regardless of cache; escalation must
+          // come from the subscription-level cache errors.
+          metrics: [{ id: "health", label: "Health", unit: "", display: { module: "manual-status-card" } }],
+        },
+      ],
+      profiles: [{ id: "self", name: "Personal", viewKey: "k", subscriptionIds: ["man-sub"] }],
+    }),
+  )
+  const erroredCache: ProviderCacheSummary = {
+    fetchedAt: NOW,
+    staleAfter: "2026-06-25T12:15:00Z",
+    status: "ok",
+    errors: [{ message: "Poe history request failed (503)", retryable: true }],
+  }
+  const payload = buildDashboardPayload({
+    config,
+    profileId: "self",
+    generatedAt: NOW,
+    providers: [{ providerAccountId: "manual-main", metrics: [], cache: erroredCache }],
+  })
+  expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("ok")
+  expect(payload.subscriptions[0]!.status).toBe("warn")
+  expect(payload.subscriptions[0]!.errors).toHaveLength(1)
+})
+
+test("subscription status escalates to stale when its cache status is stale even if metrics compute ok", () => {
+  const config = makeConfig(
+    baseConfig({
+      subscriptions: [
+        {
+          id: "man-sub", name: "Manual", providerId: "manual-main",
+          metrics: [{ id: "health", label: "Health", unit: "", display: { module: "manual-status-card" } }],
+        },
+      ],
+      profiles: [{ id: "self", name: "Personal", viewKey: "k", subscriptionIds: ["man-sub"] }],
+    }),
+  )
+  // cache.status "stale" but staleAfter in the future → metric stays ok via the
+  // timestamp check (computeMetricStatus only short-circuits on "unavailable"),
+  // yet the subscription-level cache status must still escalate the badge.
+  const staleStatusCache: ProviderCacheSummary = {
+    fetchedAt: NOW,
+    staleAfter: "2026-06-25T12:30:00Z",
+    status: "stale",
+    errors: [],
+  }
+  const payload = buildDashboardPayload({
+    config,
+    profileId: "self",
+    generatedAt: NOW,
+    providers: [{ providerAccountId: "manual-main", metrics: [], cache: staleStatusCache }],
+  })
+  expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("ok")
+  expect(payload.subscriptions[0]!.status).toBe("stale")
+})
+
+test("subscription status is unavailable when its cache status is unavailable", () => {
+  const config = makeConfig(
+    baseConfig({
+      subscriptions: [
+        {
+          id: "man-sub", name: "Manual", providerId: "manual-main",
+          metrics: [{ id: "health", label: "Health", unit: "", display: { module: "manual-status-card" } }],
+        },
+      ],
+      profiles: [{ id: "self", name: "Personal", viewKey: "k", subscriptionIds: ["man-sub"] }],
+    }),
+  )
+  const unavailableCache: ProviderCacheSummary = {
+    fetchedAt: NOW,
+    staleAfter: "2026-06-25T12:15:00Z",
+    status: "unavailable",
+    errors: [],
+  }
+  const payload = buildDashboardPayload({
+    config,
+    profileId: "self",
+    generatedAt: NOW,
+    providers: [{ providerAccountId: "manual-main", metrics: [], cache: unavailableCache }],
+  })
+  expect(payload.subscriptions[0]!.status).toBe("unavailable")
+})
+
 // Percent used: omitted when limit absent.
 test("percentUsed omitted when limit absent", () => {
   const config = makeConfig(

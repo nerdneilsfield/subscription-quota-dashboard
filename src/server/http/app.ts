@@ -47,6 +47,16 @@ function isJsonContentType(header: string | undefined): boolean {
   return header.toLowerCase().includes("application/json")
 }
 
+// Parse + validate the `?range=` query parameter shared by GET dashboard and
+// POST refresh. Absent → default range; present-but-invalid → { ok: false }
+// (caller returns 400). Mirrors behavior across both routes.
+function resolveRangeParam(url: URL): { ok: true; range: RangeKey } | { ok: false } {
+  const rangeParam = url.searchParams.get("range")
+  if (rangeParam === null) return { ok: true, range: DEFAULT_RANGE }
+  if (!VALID_RANGES.has(rangeParam)) return { ok: false }
+  return { ok: true, range: rangeParam as RangeKey }
+}
+
 function bearerViewKey(authHeader: string | undefined): string | undefined {
   if (authHeader === undefined) return undefined
   const trimmed = authHeader.trim()
@@ -180,17 +190,10 @@ export function createApp(deps?: AppDeps): Hono {
     const authFail = authenticate(c, profileId)
     if (authFail !== null) return authFail
 
-    const url = new URL(c.req.url)
-    const rangeParam = url.searchParams.get("range")
-    let range: RangeKey = DEFAULT_RANGE
-    if (rangeParam !== null) {
-      if (!VALID_RANGES.has(rangeParam)) {
-        return c.json({ error: "invalid range" }, 400)
-      }
-      range = rangeParam as RangeKey
-    }
+    const parsed = resolveRangeParam(new URL(c.req.url))
+    if (!parsed.ok) return c.json({ error: "invalid range" }, 400)
 
-    const payload = refreshService.getPayload(profileId, range)
+    const payload = refreshService.getPayload(profileId, parsed.range)
     return c.json(payload, 200)
   })
 
@@ -204,8 +207,11 @@ export function createApp(deps?: AppDeps): Hono {
     const authFail = authenticate(c, profileId)
     if (authFail !== null) return authFail
 
+    const parsed = resolveRangeParam(new URL(c.req.url))
+    if (!parsed.ok) return c.json({ error: "invalid range" }, 400)
+
     const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
-    const outcome = await refreshService.refreshProfile({ profileId, ip })
+    const outcome = await refreshService.refreshProfile({ profileId, ip, range: parsed.range })
 
     switch (outcome.status) {
       case "ok":

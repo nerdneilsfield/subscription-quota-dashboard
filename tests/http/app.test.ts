@@ -19,6 +19,8 @@ import { createManualProvider } from "../../src/server/providers/manual"
 
 const NOW_MS = Date.parse("2026-06-25T12:00:00.000Z")
 const NOW_ISO = "2026-06-25T12:00:00.000Z"
+// Mirrors the real provider 15-min staleAfter TTL (spec ~950).
+const STALE_AFTER_ISO = "2026-06-25T12:15:00.000Z"
 const SESSION_SECRET = "test-secret-very-long-and-random-xxx"
 const VIEW_KEY = "view-secret-key"
 const ALLOWED_ORIGIN = "http://localhost:5173"
@@ -81,7 +83,7 @@ function fakePoeProvider(opts: FakePoeOpts = {}, calls?: ProviderRefreshInput[])
       if (opts.delay) await opts.delay()
       if (opts.error) throw new Error(opts.error)
       return opts.result?.(input) ?? {
-        providerAccountId: input.providerAccountId, fetchedAt: NOW_ISO, staleAfter: NOW_ISO,
+        providerAccountId: input.providerAccountId, fetchedAt: NOW_ISO, staleAfter: STALE_AFTER_ISO,
         metrics: [balanceMetric(500_000)],
         historyEvents: [historyEvent("q1", 100)],
       }
@@ -298,6 +300,24 @@ test("POST /api/dashboard/self/refresh returns stale cache with a safe provider 
   expect(res.status).toBe(200)
   const body = await res.json() as { subscriptions: Array<{ metrics: Array<{ remaining?: number }> }> }
   expect(body.subscriptions[0]?.metrics[0]?.remaining).toBe(300)
+})
+
+test("POST /api/dashboard/self/refresh?range=7d returns a 7d payload (range is honored)", async () => {
+  const app = createApp(makeDeps())
+  const res = await app.request("/api/dashboard/self/refresh?range=7d", {
+    method: "POST", headers: { ...authHeaders(), Origin: ALLOWED_ORIGIN },
+  })
+  expect(res.status).toBe(200)
+  const body = await res.json() as { selectedRange: string }
+  expect(body.selectedRange).toBe("7d")
+})
+
+test("POST /api/dashboard/self/refresh?range=bad returns 400", async () => {
+  const app = createApp(makeDeps())
+  const res = await app.request("/api/dashboard/self/refresh?range=bad", {
+    method: "POST", headers: { ...authHeaders(), Origin: ALLOWED_ORIGIN },
+  })
+  expect(res.status).toBe(400)
 })
 
 // --- Cache-Control: no-store on all API responses ---

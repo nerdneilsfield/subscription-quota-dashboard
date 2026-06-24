@@ -259,7 +259,16 @@ function buildSubscriptions(
   for (const [subId, metrics] of bySub) {
     const first = metrics[0]!
     const dashboardMetrics = metrics.map((m) => buildDashboardMetric(m, generatedAt, selectedRange))
-    const subscriptionStatus = highestStatus(dashboardMetrics.map((m) => m.status))
+    const subscriptionStatuses: MetricStatus[] = dashboardMetrics.map((m) => m.status)
+    // Spec ~918: subscription status escalates from metric statuses AND
+    // subscription-level cache status/errors (e.g. an `unavailable` cache or a
+    // degraded refresh carrying provider errors must raise the subscription
+    // badge even when individual metrics compute `ok`).
+    if (first.cache) {
+      subscriptionStatuses.push(first.cache.status)
+      if (first.cache.errors.length > 0) subscriptionStatuses.push("warn")
+    }
+    const subscriptionStatus = highestStatus(subscriptionStatuses)
     const sub: DashboardSubscription = {
       id: subId,
       name: first.subscriptionName,

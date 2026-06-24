@@ -21,15 +21,20 @@ cp .env.example .env
 #   - SESSION_SECRET          random 256-bit secret used to sign session cookies
 #   - PORT                    HTTP port (default 3000)
 
-# 3. Run the dev server (Hono on the API port; for pure-frontend HMR use `bun run client:dev`).
-bun run dev
-#   -> http://127.0.0.1:3000/d/self?range=24h
+# --- Development (with hot reload) ---
+# The app runs as TWO processes in dev: the Hono API server and the Vite dev
+# server (which serves the React UI with HMR and proxies /api + /health to the
+# API). Run each in its own terminal:
+bun run dev          # terminal 1 — Hono API on http://127.0.0.1:3000
+bun run client:dev   # terminal 2 — Vite UI  on http://127.0.0.1:5173
+#   -> open http://127.0.0.1:5173/d/self?range=24h
 
-# 4. Production build (Vite client bundle + Bun server bundle into dist/).
+# --- Production ---
 bun run build
-
-# 5. Run the built server (serves the compiled client from dist/client).
 NODE_ENV=production bun run start
+#   -> open http://127.0.0.1:3000/d/self?range=24h
+#   (the built server serves the compiled client from dist/client, so a single
+#    process on :3000 handles both UI and API)
 ```
 
 ## Environment variables

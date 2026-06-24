@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, existsSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { createApp } from "./http/app"
 import type { AppDeps } from "./http/app"
@@ -29,7 +29,12 @@ async function main(): Promise<void> {
 
   const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)
 
-  const staticDir = nodeEnv === "production" ? resolve("dist/client") : undefined
+  // Serve the built SPA whenever the compiled client is present. This is
+  // decoupled from NODE_ENV because the Bun bundler bakes process.env.NODE_ENV
+  // into the artifact at build time, so a runtime NODE_ENV check is unreliable
+  // in the built server. In dev there is no build output, so the API server
+  // serves no SPA and the Vite dev server (client:dev, :5173) serves the UI.
+  const staticDir = existsSync(resolve("dist/client/index.html")) ? resolve("dist/client") : undefined
 
   const deps: AppDeps = {
     config,

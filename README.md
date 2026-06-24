@@ -12,7 +12,7 @@ Bun + Hono server, React + Vite frontend, SQLite storage, signed session-cookie 
 
 ```bash
 # 1. Install dependencies.
-rtk bun install
+bun install
 
 # 2. Copy the environment template and fill in real values.
 cp .env.example .env
@@ -22,14 +22,14 @@ cp .env.example .env
 #   - PORT                    HTTP port (default 3000)
 
 # 3. Run the dev server (Hono on the API port; for pure-frontend HMR use `bun run client:dev`).
-rtk bun run dev
+bun run dev
 #   -> http://127.0.0.1:3000/d/self?range=24h
 
 # 4. Production build (Vite client bundle + Bun server bundle into dist/).
-rtk bun run build
+bun run build
 
 # 5. Run the built server (serves the compiled client from dist/client).
-NODE_ENV=production rtk bun run start
+NODE_ENV=production bun run start
 ```
 
 ## Environment variables
@@ -120,10 +120,10 @@ No favicon is included in this MVP; browsers will get the default 404 for
 
 | Command                       | Purpose                                                |
 | ----------------------------- | ------------------------------------------------------ |
-| `rtk bun install`             | Install dependencies.                                  |
-| `rtk bun run dev`             | Bun `--watch` server (Hono API + config reload).       |
-| `rtk bun run client:dev`      | Vite dev server with HMR (separate terminal).          |
-| `rtk bun run build`           | Build client (`vite build`) and server bundle.         |
-| `rtk bun run start`           | Run the built server (production).                     |
-| `rtk bun run typecheck`       | `tsc --noEmit`.                                        |
-| `rtk bun test`                | Run the full test suite.                               |
+| `bun install`             | Install dependencies.                                  |
+| `bun run dev`             | Bun `--watch` server (Hono API + config reload).       |
+| `bun run client:dev`      | Vite dev server with HMR (separate terminal).          |
+| `bun run build`           | Build client (`vite build`) and server bundle.         |
+| `bun run start`           | Run the built server (production).                     |
+| `bun run typecheck`       | `tsc --noEmit`.                                        |
+| `bun test`                | Run the full test suite.                               |

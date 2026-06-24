@@ -165,7 +165,7 @@ afterEach(() => cleanup())
 
 - [ ] **Step 2: Install dependencies**
 
-Run: `rtk bun install`
+Run: `bun install`
 
 Expected: `bun.lock` is created and dependencies install without errors.
 
@@ -249,11 +249,11 @@ test("health endpoint reports alive", async () => {
 
 - [ ] **Step 5: Run verification**
 
-Run: `rtk bun test tests/scaffold.test.ts`
+Run: `bun test tests/scaffold.test.ts`
 
 Expected: test passes.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -262,8 +262,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add package.json bun.lock tsconfig.json vite.config.ts index.html src tests
-rtk git commit -m "chore: scaffold dashboard app"
+git add package.json bun.lock tsconfig.json vite.config.ts index.html src tests
+git commit -m "chore: scaffold dashboard app"
 ```
 
 ---
@@ -402,7 +402,7 @@ test("infers manual sourceValueKind", () => {
 
 - [ ] **Step 2: Run failing tests**
 
-Run: `rtk bun test tests/config/load-config.test.ts`
+Run: `bun test tests/config/load-config.test.ts`
 
 Expected: FAIL because `load-config.ts` and `domain.ts` do not exist.
 
@@ -497,11 +497,11 @@ Create `config/dashboard.config.ts` exporting `DashboardConfigInput` with one Po
 
 - [ ] **Step 6: Run tests and typecheck**
 
-Run: `rtk bun test tests/config/load-config.test.ts`
+Run: `bun test tests/config/load-config.test.ts`
 
 Expected: all tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -510,8 +510,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add src/shared src/server/config config tests/config
-rtk git commit -m "feat: add dashboard config validation"
+git add src/shared src/server/config config tests/config
+git commit -m "feat: add dashboard config validation"
 ```
 
 ---
@@ -600,7 +600,7 @@ test("gauge-remaining refill without reset boundary returns unknown", () => {
 
 - [ ] **Step 2: Run failing tests**
 
-Run: `rtk bun test tests/shared/metric-key.test.ts tests/stats/delta.test.ts`
+Run: `bun test tests/shared/metric-key.test.ts tests/stats/delta.test.ts`
 
 Expected: FAIL because utility modules do not exist.
 
@@ -677,11 +677,11 @@ Use `@js-temporal/polyfill` for timezone-aware calendar reset math. Add `compute
 
 - [ ] **Step 5: Run tests and typecheck**
 
-Run: `rtk bun test tests/shared tests/stats`
+Run: `bun test tests/shared tests/stats`
 
 Expected: all tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -690,8 +690,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add src/shared/window.ts src/shared/metric-key.ts src/server/stats tests/shared tests/stats
-rtk git commit -m "feat: add quota window and stats utilities"
+git add src/shared/window.ts src/shared/metric-key.ts src/server/stats tests/shared tests/stats
+git commit -m "feat: add quota window and stats utilities"
 ```
 
 ---
@@ -730,7 +730,7 @@ test("migrates in-memory database and enables WAL pragmas", () => {
 
 - [ ] **Step 2: Run failing test**
 
-Run: `rtk bun test tests/storage/database.test.ts`
+Run: `bun test tests/storage/database.test.ts`
 
 Expected: FAIL because storage modules do not exist.
 
@@ -862,11 +862,11 @@ export function createRepositories(db: DashboardDatabase): DashboardStorage
 
 - [ ] **Step 6: Run verification**
 
-Run: `rtk bun test tests/storage`
+Run: `bun test tests/storage`
 
 Expected: all storage tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -875,8 +875,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add src/server/storage tests/storage
-rtk git commit -m "feat: add sqlite storage layer"
+git add src/server/storage tests/storage
+git commit -m "feat: add sqlite storage layer"
 ```
 
 ---
@@ -902,7 +902,7 @@ Create `tests/providers/manual.test.ts` asserting:
 
 - [ ] **Step 2: Run failing tests**
 
-Run: `rtk bun test tests/providers/manual.test.ts`
+Run: `bun test tests/providers/manual.test.ts`
 
 Expected: FAIL because provider modules do not exist.
 
@@ -972,11 +972,11 @@ Create `createManualProvider()` that maps configured manual metrics into normali
 
 - [ ] **Step 5: Run verification**
 
-Run: `rtk bun test tests/providers/manual.test.ts`
+Run: `bun test tests/providers/manual.test.ts`
 
 Expected: all tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -985,8 +985,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add src/server/providers tests/providers/manual.test.ts
-rtk git commit -m "feat: add manual quota provider"
+git add src/server/providers tests/providers/manual.test.ts
+git commit -m "feat: add manual quota provider"
 ```
 
 ---
@@ -1017,7 +1017,7 @@ Create tests with a fake `fetchImpl` proving:
 
 - [ ] **Step 2: Run failing tests**
 
-Run: `rtk bun test tests/providers/poe.test.ts`
+Run: `bun test tests/providers/poe.test.ts`
 
 Expected: FAIL because `poe.ts` does not exist.
 
@@ -1037,11 +1037,11 @@ Implement:
 
 - [ ] **Step 4: Run verification**
 
-Run: `rtk bun test tests/providers/poe.test.ts`
+Run: `bun test tests/providers/poe.test.ts`
 
 Expected: all tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -1050,8 +1050,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add src/server/providers/poe.ts tests/providers/poe.test.ts
-rtk git commit -m "feat: add poe usage provider"
+git add src/server/providers/poe.ts tests/providers/poe.test.ts
+git commit -m "feat: add poe usage provider"
 ```
 
 ---
@@ -1086,7 +1086,7 @@ Create tests proving:
 
 - [ ] **Step 2: Run failing tests**
 
-Run: `rtk bun test tests/dashboard tests/stats/summary.test.ts`
+Run: `bun test tests/dashboard tests/stats/summary.test.ts`
 
 Expected: FAIL because dashboard projection does not exist.
 
@@ -1100,11 +1100,11 @@ Implement status precedence, stale handling, percentUsed rules, summary grouping
 
 - [ ] **Step 5: Run verification**
 
-Run: `rtk bun test tests/dashboard tests/stats`
+Run: `bun test tests/dashboard tests/stats`
 
 Expected: all tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -1113,8 +1113,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add src/server/dashboard src/server/stats/summary.ts src/shared/dashboard-payload.ts tests/dashboard tests/stats
-rtk git commit -m "feat: compose dashboard payload"
+git add src/server/dashboard src/server/stats/summary.ts src/shared/dashboard-payload.ts tests/dashboard tests/stats
+git commit -m "feat: compose dashboard payload"
 ```
 
 ---
@@ -1150,7 +1150,7 @@ Create tests proving:
 
 - [ ] **Step 2: Run failing tests**
 
-Run: `rtk bun test tests/auth`
+Run: `bun test tests/auth`
 
 Expected: FAIL because auth modules do not exist.
 
@@ -1170,11 +1170,11 @@ Add access-log redaction helper tests proving `Authorization`, `Cookie`, `Set-Co
 
 - [ ] **Step 5: Run verification**
 
-Run: `rtk bun test tests/auth`
+Run: `bun test tests/auth`
 
 Expected: all tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -1183,8 +1183,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add src/server/auth src/server/http/security.ts tests/auth
-rtk git commit -m "feat: add dashboard access controls"
+git add src/server/auth src/server/http/security.ts tests/auth
+git commit -m "feat: add dashboard access controls"
 ```
 
 ---
@@ -1240,7 +1240,7 @@ Create tests proving:
 
 - [ ] **Step 2: Run failing tests**
 
-Run: `rtk bun test tests/http tests/refresh`
+Run: `bun test tests/http tests/refresh`
 
 Expected: FAIL because API routes are not implemented.
 
@@ -1264,11 +1264,11 @@ Wire config, storage, providers, session, rate limits, and dashboard projection 
 
 - [ ] **Step 5: Run verification**
 
-Run: `rtk bun test tests/http tests/refresh`
+Run: `bun test tests/http tests/refresh`
 
 Expected: all tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
@@ -1277,8 +1277,8 @@ Expected: exits 0.
 Run:
 
 ```bash
-rtk git add src/server/http src/server/main.ts src/server/refresh tests/http tests/refresh
-rtk git commit -m "feat: add dashboard api routes"
+git add src/server/http src/server/main.ts src/server/refresh tests/http tests/refresh
+git commit -m "feat: add dashboard api routes"
 ```
 
 ---
@@ -1343,7 +1343,7 @@ Create `tests/client/dashboard.test.tsx` using `happy-dom` and `@testing-library
 
 - [ ] **Step 2: Run failing UI test**
 
-Run: `rtk bun test tests/client/dashboard.test.tsx`
+Run: `bun test tests/client/dashboard.test.tsx`
 
 Expected: FAIL because UI components do not exist.
 
@@ -1428,11 +1428,11 @@ Responsive breakpoints: `>=1200px` subscription grid 3 columns and summary grid 
 
 - [ ] **Step 6: Run verification**
 
-Run: `rtk bun test tests/client/dashboard.test.tsx`
+Run: `bun test tests/client/dashboard.test.tsx`
 
 Expected: all UI tests pass.
 
-Run: `rtk bun run build`
+Run: `bun run build`
 
 Expected: Vite build and Bun server bundle complete.
 
@@ -1441,8 +1441,8 @@ Expected: Vite build and Bun server bundle complete.
 Run:
 
 ```bash
-rtk git add src/client tests/client
-rtk git commit -m "feat: add dashboard interface"
+git add src/client tests/client
+git commit -m "feat: add dashboard interface"
 ```
 
 ---
@@ -1462,9 +1462,9 @@ rtk git commit -m "feat: add dashboard interface"
 
 Document:
 
-- `rtk bun install`;
+- `bun install`;
 - `.env` values `POE_API_KEY`, `SELF_DASHBOARD_VIEW_KEY`, `SESSION_SECRET`;
-- `rtk bun run dev` and `rtk bun run build`;
+- `bun run dev` and `bun run build`;
 - no `viewKey` in URLs;
 - config file location and direct `apiKey` personal-local warning;
 - SQLite path `data/dashboard.db`;
@@ -1487,19 +1487,19 @@ PORT=3000
 
 - [ ] **Step 3: Run full verification**
 
-Run: `rtk bun test`
+Run: `bun test`
 
 Expected: all tests pass.
 
-Run: `rtk bun run typecheck`
+Run: `bun run typecheck`
 
 Expected: exits 0.
 
-Run: `rtk bun run build`
+Run: `bun run build`
 
 Expected: build exits 0.
 
-Run: `rtk git status --short`
+Run: `git status --short`
 
 Expected: only intended files are modified or untracked.
 
@@ -1508,8 +1508,8 @@ Expected: only intended files are modified or untracked.
 Run:
 
 ```bash
-rtk git add README.md .env.example
-rtk git commit -m "docs: document dashboard setup"
+git add README.md .env.example
+git commit -m "docs: document dashboard setup"
 ```
 
 ---

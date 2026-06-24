@@ -97,7 +97,8 @@ function classifyWindowGroup(members: ProjectedMetric[]): WindowGroupKind {
     }
     kinds.add(windowSignature(w))
   }
-  if (hasRolling && kinds.size === 0 && !hasAny) return "rolling"
+  // hasRolling implies hasAny, so `hasRolling && !hasAny` is impossible; the
+  // rolling-only case is covered by the next guard.
   if (hasRolling && kinds.size > 0) return "mixed-reset"
   if (hasRolling) return "rolling"
   if (!hasAny) return "none"

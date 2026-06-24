@@ -544,6 +544,7 @@ test("projectProviderMetrics returns one ProjectedMetric per configured metric m
   const projected = projectProviderMetrics({
     config,
     subscriptionIds: ["poe-api"],
+    now: NOW,
     providers: [
       {
         providerAccountId: "poe-main",

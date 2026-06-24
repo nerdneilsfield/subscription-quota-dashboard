@@ -22,6 +22,7 @@ import type {
   SummaryGroup,
 } from "../../shared/dashboard-payload"
 import type { NormalizedMetric, ProviderHistoryEvent } from "../providers/types"
+import { normalizeManualMetric } from "../providers/manual-normalize"
 import { buildMetricKey } from "../../shared/metric-key"
 import { computeNextResetAt, labelWindow } from "../../shared/window"
 import { buildSummaryGroups } from "../stats/summary"
@@ -108,6 +109,7 @@ export type ProjectProviderMetricsInput = {
   providers: Array<ProviderAccountProjection>
   snapshots?: Map<string, SnapshotPoint[]>
   storedHistory?: Map<string, ProjectedHistoryPoint[]>
+  now: string
 }
 
 // --- usage filter normalization ---
@@ -129,7 +131,8 @@ export function resolveUsageFilter(providerType: string, configFilter: UsageFilt
 export function normalizeUsageFilter(filter: UsageFilter): string {
   const parts: string[] = []
   if (filter.usageTypes !== undefined && filter.usageTypes.length > 0) {
-    parts.push(`usageTypes=${filter.usageTypes.slice().sort().join(",")}`)
+    // usageTypes is already canonically sorted by resolveUsageFilter; sort once.
+    parts.push(`usageTypes=${filter.usageTypes.join(",")}`)
   }
   if (filter.apiKeyName !== undefined) parts.push(`apiKeyName=${filter.apiKeyName}`)
   if (filter.botName !== undefined) parts.push(`botName=${filter.botName}`)
@@ -143,35 +146,6 @@ function matchesUsageFilter(ev: ProviderHistoryEvent, filter: UsageFilter): bool
   if (filter.apiKeyName !== undefined && ev.apiKeyName !== filter.apiKeyName) return false
   if (filter.botName !== undefined && ev.botName !== filter.botName) return false
   return true
-}
-
-// Synthesize a NormalizedMetric from a manual MetricConfig. Mirrors the
-// manual provider's refresh normalization so projection works even when the
-// caller has not run manual.refresh() separately.
-function synthesizeManualMetric(metric: MetricConfig): NormalizedMetric {
-  const sourceValueKind: SourceValueKind = metric.sourceValueKind ?? inferSourceValueKind(metric)
-  const m: NormalizedMetric = {
-    providerMetricId: metric.providerMetricId ?? metric.id,
-    label: metric.label,
-    unit: metric.unit,
-    sourceValueKind,
-    sourceConfidence: "known",
-  }
-  if (metric.limit !== undefined) m.limit = metric.limit
-  if (metric.used !== undefined) m.used = metric.used
-  if (metric.remaining !== undefined) m.remaining = metric.remaining
-  if (metric.window !== undefined) m.window = metric.window
-  if (metric.notes !== undefined) m.notes = metric.notes
-  if (metric.updatedAt !== undefined) m.updatedAt = metric.updatedAt
-  m.suggestedDisplayModule = metric.display.module
-  return m
-}
-
-function inferSourceValueKind(metric: MetricConfig): SourceValueKind {
-  if (metric.sourceValueKind !== undefined) return metric.sourceValueKind
-  if (metric.used !== undefined) return "gauge-used"
-  if (metric.remaining !== undefined) return "gauge-remaining"
-  return "status"
 }
 
 // --- projection ---
@@ -193,9 +167,10 @@ export function projectProviderMetrics(input: ProjectProviderMetricsInput): Proj
       )
       // Manual providers are config-as-source: if no provider metric was
       // supplied (caller skipped manual.refresh), synthesize one from config
-      // so the projection still has values to render.
+      // via the SAME normalization as the manual provider so sourceConfidence
+      // (rolling-freshness-aware) is computed identically in both paths.
       const providerMetric =
-        matchedProviderMetric ?? (providerType === "manual" ? synthesizeManualMetric(metric) : undefined)
+        matchedProviderMetric ?? (providerType === "manual" ? normalizeManualMetric(metric, input.now) : undefined)
       const resolvedUsageFilter = resolveUsageFilter(providerType, metric.usageFilter)
       const normalizedUsageFilter = normalizeUsageFilter(resolvedUsageFilter)
       const rawHistory = providerProjection?.historyEvents ?? []
@@ -251,6 +226,7 @@ export function buildDashboardPayload(input: DashboardProjectionInput): Dashboar
     config: input.config,
     subscriptionIds: profile.subscriptionIds,
     providers: input.providers,
+    now: input.generatedAt,
     ...(input.snapshots !== undefined ? { snapshots: input.snapshots } : {}),
     ...(input.storedHistory !== undefined ? { storedHistory: input.storedHistory } : {}),
   })
@@ -362,7 +338,7 @@ function buildDashboardMetric(
 
   const metric: DashboardMetric = {
     id: config.id,
-    ...(config.providerMetricId !== undefined ? { providerMetricId: p.providerMetricId } : { providerMetricId: p.providerMetricId }),
+    providerMetricId: p.providerMetricId,
     metricKey: p.metricKey,
     label: config.label,
     unit: config.unit,
@@ -701,6 +677,4 @@ function parseDurationToMs(duration: string): number | undefined {
   return value * 86_400_000
 }
 
-// Re-export for tests and downstream API layers.
-export { buildSummaryGroups as _buildSummaryGroups } from "../stats/summary"
 export type { SummaryGroup }

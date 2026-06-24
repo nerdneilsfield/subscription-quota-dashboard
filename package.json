@@ -1,0 +1,33 @@
+{
+  "name": "subscription-quota-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server/main.ts",
+    "client:dev": "vite --host 127.0.0.1",
+    "build": "vite build && bun build src/server/main.ts --target=bun --outdir=dist/server",
+    "start": "bun dist/server/main.js",
+    "test": "bun test --preload ./tests/setup-dom.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@js-temporal/polyfill": "latest",
+    "@hono/node-server": "latest",
+    "@vitejs/plugin-react": "latest",
+    "hono": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-router-dom": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "latest",
+    "@testing-library/react": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "bun-types": "latest",
+    "happy-dom": "latest",
+    "typescript": "latest"
+  }
+}

@@ -29,6 +29,7 @@ import {
   type ProviderAccountProjection,
   type ProviderCacheSummary,
   type ProjectedHistoryPoint,
+  type SnapshotPoint,
   type UsageFilter,
 } from "../dashboard/project"
 import { buildMetricKey } from "../../shared/metric-key"
@@ -360,8 +361,11 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       })
     }
 
-    // Stored history per metric key.
+    // Stored history + snapshots per metric key. Snapshots feed the
+    // snapshot-delta rangeStats path for metrics that have no provider-history
+    // consumption events (e.g. gauge-remaining balances, manual gauges).
     const storedHistory = new Map<string, ProjectedHistoryPoint[]>()
+    const snapshots = new Map<string, SnapshotPoint[]>()
     const rangeMs = RANGE_MS[range] ?? RANGE_MS["24h"]!
     const rangeStart = new Date(Date.parse(generatedAt) - rangeMs).toISOString()
     const rangeEnd = generatedAt
@@ -374,6 +378,20 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
         if (rows.length > 0) {
           storedHistory.set(metricKey, rows.map((r) => ({ sourceTimestamp: r.sourceTimestamp, value: r.value, valueKind: r.valueKind })))
         }
+        const snapRows = storage.snapshots.listForMetric(metricKey, rangeStart, rangeEnd)
+        if (snapRows.length > 0) {
+          snapshots.set(
+            metricKey,
+            snapRows.map((s) => {
+              const p: SnapshotPoint = { timestamp: s.timestamp, sourceValueKind: s.sourceValueKind }
+              if (s.authoritativeValue !== undefined) p.authoritativeValue = s.authoritativeValue
+              if (s.used !== undefined) p.used = s.used
+              if (s.remaining !== undefined) p.remaining = s.remaining
+              if (s.limit !== undefined) p.limit = s.limit
+              return p
+            }),
+          )
+        }
       }
     }
 
@@ -384,6 +402,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       selectedRange: range,
       providers: providerProjections,
       ...(storedHistory.size > 0 ? { storedHistory } : {}),
+      ...(snapshots.size > 0 ? { snapshots } : {}),
     })
   }
 

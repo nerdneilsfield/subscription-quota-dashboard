@@ -20,6 +20,7 @@ import type {
   ProviderRefreshResult,
 } from "../../src/server/providers/types"
 import { createRefreshService } from "../../src/server/refresh/refresh-service"
+import { buildMetricKey } from "../../src/shared/metric-key"
 
 const NOW_MS = Date.parse("2026-06-25T12:00:00.000Z")
 const NOW_ISO = "2026-06-25T12:00:00.000Z"
@@ -405,4 +406,47 @@ test("returns stale cache with a safe error when provider refresh fails after ca
     expect(outcome.error).toContain("down")
     expect(outcome.payload.subscriptions[0]?.metrics[0]?.remaining).toBe(300)
   }
+})
+
+// --- Test 9: snapshot-delta rangeStats for a metric with no provider history ---
+
+test("a snapshot-only metric (no provider-history events) yields snapshot-delta rangeStats", () => {
+  const config = loadDashboardConfig({
+    providers: [poeProvider("poe-main")],
+    subscriptions: [{ id: "sub-main", name: "Main", providerId: "poe-main", metrics: [pointsMetric("points")] }],
+    profiles: [{ id: "self", name: "Self", viewKey: "k", subscriptionIds: ["sub-main"] }],
+  })
+  const storage = makeStorage()
+  const metricKey = buildMetricKey("poe-main", "sub-main", "points")
+  // Seed two gauge-remaining snapshots within the 24h window, no history events.
+  storage.snapshots.insertMany([
+    {
+      providerAccountId: "poe-main",
+      subscriptionId: "sub-main",
+      metricId: "points",
+      metricKey,
+      timestamp: "2026-06-25T10:00:00.000Z",
+      source: "provider",
+      sourceValueKind: "gauge-remaining",
+      remaining: 800,
+    },
+    {
+      providerAccountId: "poe-main",
+      subscriptionId: "sub-main",
+      metricId: "points",
+      metricKey,
+      timestamp: "2026-06-25T11:30:00.000Z",
+      source: "provider",
+      sourceValueKind: "gauge-remaining",
+      remaining: 750,
+    },
+  ])
+  // No provider adapters needed: getPayload reads storage only.
+  const svc = createRefreshService({ config, storage, providers: new Map(), now: fixedNow })
+
+  const payload = svc.getPayload("self", "24h")
+  const metric = payload.subscriptions[0]!.metrics[0]!
+  expect(metric.rangeStats!.source).toBe("snapshot-delta")
+  expect(metric.rangeStats!.consumption).toBe(50)
+  expect(metric.rangeStats!.burnRate).toBeDefined()
 })

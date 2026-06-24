@@ -204,7 +204,7 @@ test("import state returns undefined when no row", () => {
   expect(repo.importState.get("missing")).toBeUndefined()
 })
 
-test("snapshots persist metricKey with source value kind", () => {
+test("snapshots persist metricKey with source value kind and read back via listForMetric", () => {
   const repo = makeDb()
   const rows: SnapshotInsert[] = [
     {
@@ -232,6 +232,39 @@ test("snapshots persist metricKey with source value kind", () => {
     },
   ]
   expect(() => repo.snapshots.insertMany(rows)).not.toThrow()
+  const points = repo.snapshots.listForMetric("poe%2Fmain/sub/points", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z")
+  expect(points).toHaveLength(1)
+  expect(points[0]?.authoritativeValue).toBe(100)
+  expect(points[0]?.used).toBe(25)
+  expect(points[0]?.remaining).toBe(75)
+  expect(points[0]?.limit).toBe(100)
+  expect(points[0]?.sourceValueKind).toBe("counter")
+})
+
+test("snapshots listForMetric filters by metric key and inclusive time range", () => {
+  const repo = makeDb()
+  const mk = (metricKey: string, ts: string, remaining: number): SnapshotInsert => ({
+    providerAccountId: "poe/main",
+    subscriptionId: "sub",
+    metricId: metricKey.includes("credits") ? "credits" : "points",
+    metricKey,
+    timestamp: ts,
+    source: "provider",
+    sourceValueKind: "gauge-remaining",
+    remaining,
+  })
+  repo.snapshots.insertMany([
+    mk("poe%2Fmain/sub/points", "2026-01-01T00:00:00.000Z", 800),
+    mk("poe%2Fmain/sub/points", "2026-01-01T12:00:00.000Z", 750),
+    mk("poe%2Fmain/sub/points", "2026-01-03T00:00:00.000Z", 700),
+    mk("poe%2Fmain/sub/credits", "2026-01-01T00:00:00.000Z", 5),
+  ])
+  // Inclusive bounds on points key; credits key excluded; out-of-range point excluded.
+  const got = repo.snapshots.listForMetric("poe%2Fmain/sub/points", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z")
+  expect(got.map((s) => s.timestamp).sort()).toEqual(["2026-01-01T00:00:00.000Z", "2026-01-01T12:00:00.000Z"])
+  expect(got.every((s) => s.metricKey === "poe%2Fmain/sub/points")).toBe(true)
+  // Empty for unknown key.
+  expect(repo.snapshots.listForMetric("missing", "2026-01-01T00:00:00.000Z", "2026-01-02T00:00:00.000Z")).toEqual([])
 })
 
 test("refreshRuns insertStarted returns id and finish updates row", () => {

@@ -24,6 +24,19 @@ export type SnapshotInsert = {
   limit?: number
 }
 
+// Read projection of a quota_snapshots row: carries exactly the fields
+// computeSnapshotConsumption (src/server/dashboard/project.ts) consumes.
+export type SnapshotReadRow = {
+  metricKey: string
+  timestamp: string
+  source: "provider" | "manual"
+  sourceValueKind: SourceValueKind
+  authoritativeValue?: number
+  used?: number
+  remaining?: number
+  limit?: number
+}
+
 export type ImportStateRecord = {
   providerAccountId: string
   maxCreationTime?: number
@@ -52,6 +65,7 @@ export type DashboardStorage = {
   }
   snapshots: {
     insertMany(rows: SnapshotInsert[]): void
+    listForMetric(metricKey: string, rangeStart: string, rangeEnd: string): SnapshotReadRow[]
   }
   historyEvents: {
     insertMany(rows: ProjectedHistoryEvent[]): void
@@ -76,6 +90,17 @@ type ProviderCacheRow = {
   status: string
   normalized_json: string
   error_json: string | null
+}
+
+type SnapshotRow = {
+  metric_key: string
+  timestamp: string
+  source: string
+  source_value_kind: string
+  authoritative_value: number | null
+  used: number | null
+  remaining: number | null
+  limit_value: number | null
 }
 
 type HistoryEventRow = {
@@ -110,6 +135,20 @@ function decodeProviderCache(row: ProviderCacheRow): ProviderCacheRecord {
     normalized: JSON.parse(row.normalized_json) as ProviderCacheRecord["normalized"],
     errors: row.error_json ? (JSON.parse(row.error_json) as ProviderCacheRecord["errors"]) : [],
   }
+}
+
+function decodeSnapshot(row: SnapshotRow): SnapshotReadRow {
+  const out: SnapshotReadRow = {
+    metricKey: row.metric_key,
+    timestamp: row.timestamp,
+    source: row.source as SnapshotReadRow["source"],
+    sourceValueKind: row.source_value_kind as SourceValueKind,
+  }
+  if (row.authoritative_value !== null) out.authoritativeValue = row.authoritative_value
+  if (row.used !== null) out.used = row.used
+  if (row.remaining !== null) out.remaining = row.remaining
+  if (row.limit_value !== null) out.limit = row.limit_value
+  return out
 }
 
 function decodeHistoryEvent(row: HistoryEventRow): ProjectedHistoryEvent {
@@ -199,6 +238,20 @@ export function createRepositories(db: DashboardDatabase): DashboardStorage {
           r.limit ?? null,
         )
       }
+    },
+    listForMetric(metricKey, rangeStart, rangeEnd) {
+      const rows = db
+        .query<SnapshotRow, [string, string, string]>(
+          [
+            "select metric_key, timestamp, source, source_value_kind,",
+            "       authoritative_value, used, remaining, limit_value",
+            "from quota_snapshots",
+            "where metric_key = ? and timestamp >= ? and timestamp <= ?",
+            "order by timestamp asc",
+          ].join("\n"),
+        )
+        .all(metricKey, rangeStart, rangeEnd)
+      return rows.map(decodeSnapshot)
     },
   }
 

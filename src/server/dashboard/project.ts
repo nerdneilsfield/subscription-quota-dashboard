@@ -139,7 +139,7 @@ export function normalizeUsageFilter(filter: UsageFilter): string {
   return parts.join("|")
 }
 
-function matchesUsageFilter(ev: ProviderHistoryEvent, filter: UsageFilter): boolean {
+export function matchesUsageFilter(ev: ProviderHistoryEvent, filter: UsageFilter): boolean {
   if (filter.usageTypes !== undefined) {
     if (ev.usageType === undefined || !filter.usageTypes.includes(ev.usageType)) return false
   }

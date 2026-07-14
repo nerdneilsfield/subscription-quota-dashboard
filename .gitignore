@@ -145,5 +145,8 @@ vite.config.ts.timestamp-*
 # SDD scratch ledger
 .superpowers/
 
+# Serena project workspace
+.serena/
+
 # Runtime SQLite
 data/

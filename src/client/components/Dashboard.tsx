@@ -175,33 +175,39 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
   return (
     <div className="dashboard">
       <header className="dashboard__header">
-        <div className="dashboard__title">
-          <h1>{payload.profile.name}</h1>
-          <p className="dashboard__meta">
-            {anyStale && <span className="header-warn" aria-label="stale data" title="Some data is stale">▲</span>}
-            <span>Updated </span>
-            <TimeDisplay iso={payload.generatedAt} now={now} />
-          </p>
+        <div className="dashboard__identity">
+          <span className="dashboard__wordmark">Quota dashboard</span>
+          <div className="dashboard__title">
+            <h1>{payload.profile.name}</h1>
+            <p className="dashboard__meta">
+              {anyStale && <span className="header-warn" aria-label="stale data" title="Some data is stale">▲</span>}
+              <span>Updated </span>
+              <TimeDisplay iso={payload.generatedAt} now={now} />
+            </p>
+          </div>
         </div>
         <div className="dashboard__controls">
           <button
             type="button"
             className="btn-refresh"
+            data-state={refresh.state}
             onClick={doRefresh}
             aria-busy={refresh.state === "refreshing"}
             disabled={refresh.state === "refreshing"}
           >
-            <RefreshLabel state={refresh} />
+            <span aria-live="polite"><RefreshLabel state={refresh} /></span>
           </button>
         </div>
       </header>
 
-      <RangeSwitch
-        ranges={payload.ranges}
-        selected={range}
-        onSelect={onRangeChange ?? (() => {})}
-        loading={rangeLoading}
-      />
+      <div className="dashboard__range-rail">
+        <RangeSwitch
+          ranges={payload.ranges}
+          selected={range}
+          onSelect={onRangeChange ?? (() => {})}
+          loading={rangeLoading}
+        />
+      </div>
 
       {unavailable && (
         <div className="dashboard-banner dashboard-banner--unavailable" role="alert">
@@ -213,14 +219,31 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
         <EmptyState />
       ) : (
         <main className="dashboard__body">
-          {payload.summaryGroups.length > 0 && <SummaryRow groups={payload.summaryGroups} now={now} />}
-          <div className="subscriptions-grid">
-            {payload.subscriptions.map((s) => (
-              <SubscriptionCard key={s.id} subscription={s} now={now} />
-            ))}
-          </div>
+          {payload.summaryGroups.length > 0 && (
+            <section className="dashboard__summary" aria-label="Quota summary">
+              <SummaryRow groups={payload.summaryGroups} now={now} />
+            </section>
+          )}
+          <section className="dashboard__subscriptions" aria-labelledby="subscriptions-heading">
+            <div className="section-heading">
+              <h2 id="subscriptions-heading">Subscriptions</h2>
+              <p>{payload.subscriptions.length} configured</p>
+            </div>
+            <div className="subscriptions-grid">
+              {payload.subscriptions.map((s) => (
+                <SubscriptionCard key={s.id} subscription={s} now={now} />
+              ))}
+            </div>
+          </section>
         </main>
       )}
+
+      <footer className="dashboard__footer">
+        <p>
+          <span>{range} range</span>
+          <span>Generated <TimeDisplay iso={payload.generatedAt} now={now} /></span>
+        </p>
+      </footer>
     </div>
   )
 }

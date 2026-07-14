@@ -1,0 +1,10 @@
+{
+  "scannedAt": "2026-07-14",
+  "fontStack": "system UI + monospace",
+  "palette": "dark hex custom properties in src/client/styles.css",
+  "motion": "motion-cut; no motion library",
+  "spacing": "ad hoc 8–20px scale",
+  "framework": "React + Vite",
+  "preserved": ["framework", "component ownership", "application behavior"],
+  "introduced": ["Cobalt tokens", "Workbench macrostructure", "state-complete controls", "responsive discipline"]
+}

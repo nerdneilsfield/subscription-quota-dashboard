@@ -108,7 +108,7 @@ Sourced from `cc-switch/src-tauri/src/services/balance.rs`.
 | OpenRouter | `GET https://openrouter.ai/api/v1/credits` | `Bearer` | `remaining = data.total_credits - data.total_usage` | USD | derived |
 | Novita AI | `GET https://api.novita.ai/v3/user/balance` | `Bearer` | `availableBalance` | USD | **÷10000** (raw unit = 0.0001 USD) |
 
-All balance fields use `parseNumber` (string-or-number tolerant). SiliconFlow CN/EN share one adapter with a `baseUrl` field (default `https://api.siliconflow.cn` for CN, user sets `https://api.siliconflow.com` for EN). Currency is implied by host (`.cn` -> CNY, `.com` -> USD) and set in config's `unit` field.
+All balance fields use `parseNumber` (string-or-number tolerant). SiliconFlow CN/EN share one adapter with a `baseUrl` field (default `https://api.siliconflow.cn` for CN, user sets `https://api.siliconflow.com` for EN). Currency is implied by host (`.cn` -> CNY, `.com` -> USD); adapter auto-sets `unit` based on host if config does not specify `unit` (matching cc-switch `balance.rs:260`).
 
 ### ProviderAccountConfig Variants
 
@@ -132,7 +132,7 @@ All A-class providers emit a single metric with `providerMetricId: "balance"`, `
 | OpenRouter | `total_credits - total_usage` | `total_credits` | `total_usage` | `notes`: "No credits remaining" if `remaining <= 0` |
 | Novita | `availableBalance / 10000` | undefined | undefined | `notes`: "No balance remaining" if `remaining <= 0` |
 
-DeepSeek iterates all `balance_infos[]` entries but emits only the first (cc-switch does the same - one currency per account is the norm). `window` is undefined for all (balance has no period).
+DeepSeek returns multiple `balance_infos[]` entries (one per currency); adapter emits ALL entries, each with `providerMetricId: "balance"` (cc-switch does the same at `balance.rs:116-139`). If multiple currencies exist, config should declare separate metrics or the projection layer picks the first match. `window` is undefined for all (balance has no period).
 
 ### Error Handling
 
@@ -220,7 +220,7 @@ Business envelope: `body.base_resp.status_code != 0` -> error from `status_msg`,
 
 #### ZenMux
 
-Produces exactly 2 metrics (cc-switch `coding_plan.rs:555-597`). **Critical**: `usage_percentage` is a 0-1 fraction, must be ×100.
+Produces up to 2 metrics (cc-switch `coding_plan.rs:555-597`). Each tier is conditional (`if let Some(...)`); a deployment with only `quota_5_hour` produces 1 metric. **Critical**: `usage_percentage` is a 0-1 fraction, must be ×100.
 
 - **five_hour** (from `data.quota_5_hour`): `providerMetricId: "five_hour"`, `limit = max_value_usd`, `used = used_value_usd`, `remaining = max_value_usd - used_value_usd`, `percentUsed = usage_percentage * 100`, `resetAt = resets_at`, `sourceValueKind: "gauge-remaining"`
 - **weekly_limit** (from `data.quota_7_day`): `providerMetricId: "weekly_limit"`, same fields from `quota_7_day`
@@ -322,7 +322,7 @@ Same as A class with additions:
 
 ## Projection Layer Changes
 
-### `isPoeOverLimit` -> `isOverLimit` (generalized)
+### `isPoeOverLimit` -> `isOverLimit` (narrow generalization)
 
 Current code in `buildDashboardMetric` (`project.ts:309-314`):
 
@@ -335,24 +335,17 @@ const isPoeOverLimit =
   providerRemaining > limit
 ```
 
-**Generalize** to cover both absolute and percent-based over-limit. New logic:
+**Generalize narrowly** - drop the `providerType === "poe"` condition but keep the `gauge-remaining` + `remaining > limit` constraint. This is the ONLY case where the over-limit display hack applies: `remaining` exceeds `limit` (e.g. Poe credits beyond plan, DeepSeek balance > configured limit). Do NOT extend to `gauge-used` or percent-based providers - those have legitimate `used >= limit` states that should show `critical` via the existing threshold logic (`project.ts:665-667`).
 
 ```ts
 const isOverLimit =
-  // Absolute gauge-remaining: balance exceeds configured limit (Poe, DeepSeek, etc.)
-  (pm?.sourceValueKind === "gauge-remaining" &&
-    limit !== undefined && providerRemaining !== undefined &&
-    providerRemaining > limit) ||
-  // Absolute gauge-used: used exceeds limit (Volcengine AFP, Kimi)
-  (pm?.sourceValueKind === "gauge-used" &&
-    limit !== undefined && providerUsed !== undefined &&
-    providerUsed > limit) ||
-  // Percent-based: 100%+ used (MiniMax, ZenMux, Zhipu, Volcengine Coding Plan)
-  (limit !== undefined && used !== undefined && limit > 0 &&
-    used >= limit)
+  pm?.sourceValueKind === "gauge-remaining" &&
+  limit !== undefined &&
+  providerRemaining !== undefined &&
+  providerRemaining > limit
 ```
 
-`computeMetricStatus` parameter renamed `isPoeOverLimit` -> `isOverLimit`. Poe behavior unchanged (still hits the first branch). B-class providers now correctly show `ok` with `used=0` when over-limit, instead of `critical`.
+`computeMetricStatus` parameter renamed `isPoeOverLimit` -> `isOverLimit`. Poe behavior unchanged (still hits this branch). A-class gauge-remaining providers (DeepSeek, SiliconFlow, etc.) with a configured `limit` below current balance also naturally apply. B-class `gauge-used` and percent-based providers do NOT hit `isOverLimit` - their quota exhaustion is handled by existing threshold checks (`percentUsed >= critT` at `project.ts:662`, `used > limit` at `project.ts:665`).
 
 ### Per-Provider Projection Table
 
@@ -368,11 +361,11 @@ How `buildDashboardMetric` (`project.ts:295-364`) derives fields for each provid
 | Kimi | provider `detail.limit` | `max(0, limit - remaining)` | provider `detail.remaining` | `(used / limit) * 100` |
 | Zhipu | `100` (adapter) | provider `percentage` | `100 - percentage` | `(used / limit) * 100 = percentage` |
 | MiniMax | `100` (adapter) | `100 - remaining` (adapter) | provider `current_*_remaining_percent` | `(used / limit) * 100` |
-| ZenMux | provider `max_value_usd` | provider `used_value_usd` | `max - used` | `usage_percentage * 100` (adapter) |
-| Volcengine AFP | provider `Quota` | provider `Used` | `Quota - Used` | `(Used / Quota) * 100` (adapter) |
-| Volcengine CP | `100` (adapter) | provider `Percent` | `100 - Percent` | `Percent` (adapter) |
+| ZenMux | provider `max_value_usd` | provider `used_value_usd` | `max - used` | derived: `(used / limit) * 100` (may differ slightly from `usage_percentage * 100` due to API rounding) |
+| Volcengine AFP | provider `Quota` | provider `Used` | `Quota - Used` | derived: `(Used / Quota) * 100` |
+| Volcengine CP | `100` (adapter) | provider `Percent` | `100 - Percent` | derived: `(used / limit) * 100 = Percent` |
 
-`buildDashboardMetric` already handles `used = max(0, limit - remaining)` when `used` is undefined and `limit`+`remaining` are set (`project.ts:316-327`). Adapters set fields directly when the API provides them; otherwise projection derives.
+`buildDashboardMetric` already handles `used = max(0, limit - remaining)` when `used` is undefined and `limit`+`remaining` are set (`project.ts:316-327`). Adapters set fields directly when the API provides them; otherwise projection derives. **Adapters do NOT set `percentUsed`** - `NormalizedMetric` has no such field; projection always derives it at `project.ts:324-327`.
 
 ### `resolveUsageFilter` - Unchanged
 
@@ -458,7 +451,7 @@ export type ProviderRuntimeState = {
 }
 ```
 
-Volcengine adapter reads `runtime.ak` / `runtime.sk`. All other adapters read `runtime.apiKey`. `apiKey` is never used to carry AK/SK.
+Volcengine adapter reads `runtime.ak` / `runtime.sk`. All other adapters read `runtime.apiKey`. `apiKey` is never used to carry AK/SK. The Volcengine adapter must explicitly check `if (!runtime.ak || !runtime.sk)` at the top of `refresh()` (TypeScript cannot narrow `runtime.ak` based on `runtime.available` being `true`).
 
 ### SSRF Defense for `baseUrl`
 
@@ -473,13 +466,17 @@ const PROVIDER_HOST_ALLOWLIST: Record<string, string[]> = {
 }
 ```
 
-Validation: parse `baseUrl` hostname; for allowlisted providers reject if hostname not in list; for all providers reject if hostname resolves to loopback (`127.0.0.0/8`, `::1`) or private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`). On violation: `fail(path, "baseUrl hostname not allowed")`.
+Validation: parse `baseUrl` hostname; for allowlisted providers reject if hostname not in list; for all providers reject if hostname resolves to loopback (`127.0.0.0/8`, `::1`), private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16`, `fe80::/10`), IPv6 ULA (`fc00::/7`), CGNAT (`100.64.0.0/10`), or IPv4-mapped IPv6 loopback (`::ffff:127.0.0.1`). On violation: `fail(path, "baseUrl hostname not allowed")`.
+
+**DNS rebinding note (ZenMux):** The SSRF check runs at config-load time. For ZenMux (no hostname allowlist), a hostname could resolve to a public IP at load time and `169.254.169.254` at request time (DNS rebinding / TOCTOU). Since ZenMux `baseUrl` is user-supplied and the user controls the deployment, this is accepted as documented risk. If full protection is needed, re-resolve the hostname at request time in the adapter before `fetch`.
 
 ZenMux has no hostname allowlist (private deployments expected) but still rejects loopback/private-link addresses to prevent cloud-metadata exfiltration.
 
 ## Concurrency
 
 `refresh-service.ts` default `concurrencyLimit` raised from 2 to 8. With 12+ provider accounts, 2 serializes refreshes into ~90s worst case; 8 keeps it under ~20s. Per-provider timeout stays at the adapter level (fetch with 15s timeout, matching cc-switch).
+
+**Provider-side rate limits:** Each provider account uses its own AK/apiKey, so cross-account concurrency is safe. Same-account concurrency is deduped by singleflight (keyed by `providerAccountId`). The existing rate limiter is per-`ip:profileId:providerAccountId`, not per-provider-TYPE, so it does NOT protect against provider-side rate limits - but singleflight ensures one in-flight call per account. If a provider has IP-based rate limits, document the risk; no code change needed for this spec's scope.
 
 ## main.ts & app.ts Type Widening
 
@@ -584,7 +581,7 @@ Port from cc-switch's `volcengine_sign_structure_and_determinism` test (`coding_
 New test cases:
 1. Non-Poe `gauge-remaining` provider with configured `limit` below current balance -> `isOverLimit` branch hit, `used = 0`, `percentUsed` omitted, status `ok`
 2. `gauge-used` provider with `used > limit` -> `isOverLimit` branch hit, status `ok` (not critical)
-3. Percent-based metric (`limit=100, used=100`) without `isOverLimit` -> status `critical` (via threshold); with `isOverLimit` -> status `ok`
+3. Percent-based metric (`limit=100, used=100`) -> status `critical` via threshold check (NOT `isOverLimit`, which only applies to `gauge-remaining` where `remaining > limit`)
 
 ### load-config Regression (`tests/config/load-config.test.ts`)
 
@@ -671,9 +668,9 @@ Six logical commits, designed for incremental reviewability:
 | Zhipu auth | No "Bearer " prefix on `Authorization` header. |
 | `volcengine-sig.ts` | Independent utility file, only auxiliary file split out. |
 | `ProviderRuntimeState` | Extended with `ak?/sk?` (not packed into `apiKey` string). |
-| `resolveAkSkCredential` | Separate function, does NOT reuse `resolveBearerCredential` for AK/SK semantics. |
+| `resolveAkSkCredential` | Reuses `resolveBearerCredential` internally (maps akEnv->apiKeyEnv, skEnv->apiKeyEnv); returns `{ak, sk}` or `{reason}`. Separate at the API boundary, DRY internally. |
 | `resolveUsageFilter` | Unchanged (Poe default retained). |
-| `isOverLimit` | Generalized to cover `gauge-remaining`, `gauge-used`, and percent-based (`used >= limit`) over-limit. |
+| `isOverLimit` | Narrowly generalized: only `gauge-remaining` with `remaining > limit` (the Poe-style quirk). NOT extended to `gauge-used` or percent-based - those use existing threshold logic for quota exhaustion. |
 | Business error envelopes | Per-provider: Zhipu `success`, MiniMax `base_resp.status_code`, ZenMux `success`, Volcengine `ResponseMetadata.Error`. |
 | `parseNumber` | Shared helper, string-or-number tolerant (ports cc-switch `parse_f64`). |
 | Concurrency | Raised from 2 to 8 (12+ adapters). |

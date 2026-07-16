@@ -11,6 +11,7 @@ import { createPoeProvider } from "./providers/poe"
 import { createDeepseekProvider } from "./providers/deepseek"
 import { createStepfunProvider } from "./providers/stepfun"
 import { createSiliconflowProvider } from "./providers/siliconflow"
+import { createOpenrouterProvider } from "./providers/openrouter"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
     ["deepseek", createDeepseekProvider()],
     ["stepfun", createStepfunProvider()],
     ["siliconflow", createSiliconflowProvider()],
+    ["openrouter", createOpenrouterProvider()],
   ])
 
   const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)

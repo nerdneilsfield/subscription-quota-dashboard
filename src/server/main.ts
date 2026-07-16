@@ -13,6 +13,7 @@ import { createStepfunProvider } from "./providers/stepfun"
 import { createSiliconflowProvider } from "./providers/siliconflow"
 import { createOpenrouterProvider } from "./providers/openrouter"
 import { createNovitaProvider } from "./providers/novita"
+import { createKimiProvider } from "./providers/kimi"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
     ["siliconflow", createSiliconflowProvider()],
     ["openrouter", createOpenrouterProvider()],
     ["novita", createNovitaProvider()],
+    ["kimi", createKimiProvider()],
   ])
 
   const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)

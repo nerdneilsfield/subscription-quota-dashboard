@@ -41,6 +41,18 @@ export type MetricThresholds = {
 export type ProviderAccountConfig =
   | { id: string; type: "poe"; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
   | { id: string; type: "manual" }
+  // A class - account balance (Bearer auth)
+  | { id: string; type: "deepseek"; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  | { id: string; type: "stepfun"; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  | { id: string; type: "siliconflow"; baseUrl?: string | undefined; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  | { id: string; type: "openrouter"; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  | { id: string; type: "novita"; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  // B class - coding plan (Bearer auth, except Zhipu raw-key and Volcengine AK/SK)
+  | { id: string; type: "kimi"; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  | { id: string; type: "zhipu"; baseUrl?: string | undefined; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  | { id: string; type: "minimax"; baseUrl?: string | undefined; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  | { id: string; type: "zenmux"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
+  | { id: string; type: "volcengine"; region?: string | undefined; akEnv?: string | undefined; ak?: string | undefined; skEnv?: string | undefined; sk?: string | undefined }
 
 export type SubscriptionConfig = {
   id: string
@@ -52,5 +64,11 @@ export type SubscriptionConfig = {
 
 export type ProfileConfig = { id: string; name: string; viewKey: string | undefined; subscriptionIds: string[] }
 export type DashboardConfigInput = { providers: ProviderAccountConfig[]; subscriptions: SubscriptionConfig[]; profiles: ProfileConfig[] }
-export type ProviderRuntimeState = { available: boolean; apiKey?: string; reason?: string }
+export type ProviderRuntimeState = {
+  available: boolean
+  apiKey?: string
+  ak?: string
+  sk?: string
+  reason?: string
+}
 export type NormalizedConfig = { providers: Map<string, ProviderAccountConfig>; providerRuntime: Map<string, ProviderRuntimeState>; subscriptions: Map<string, SubscriptionConfig>; profiles: Map<string, ProfileConfig> }

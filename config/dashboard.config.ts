@@ -11,6 +11,18 @@ const config: DashboardConfigInput = {
       id: "manual-main",
       type: "manual",
     },
+    // --- A class: account balance providers ---
+    // { id: "deepseek-main", type: "deepseek", apiKeyEnv: "DEEPSEEK_API_KEY" },
+    // { id: "stepfun-main", type: "stepfun", apiKeyEnv: "STEPFUN_API_KEY" },
+    // { id: "siliconflow-main", type: "siliconflow", apiKeyEnv: "SILICONFLOW_API_KEY" },
+    // { id: "openrouter-main", type: "openrouter", apiKeyEnv: "OPENROUTER_API_KEY" },
+    // { id: "novita-main", type: "novita", apiKeyEnv: "NOVITA_API_KEY" },
+    // --- B class: coding plan providers ---
+    // { id: "kimi-main", type: "kimi", apiKeyEnv: "KIMI_API_KEY" },
+    // { id: "zhipu-main", type: "zhipu", apiKeyEnv: "ZHIPU_API_KEY" },
+    // { id: "minimax-main", type: "minimax", apiKeyEnv: "MINIMAX_API_KEY" },
+    // { id: "zenmux-main", type: "zenmux", baseUrl: "https://your-zenmux.example.com", apiKeyEnv: "ZENMUX_API_KEY" },
+    // { id: "volc-main", type: "volcengine", region: "cn-beijing", akEnv: "VOLCENGINE_AK", skEnv: "VOLCENGINE_SK" },
   ],
   subscriptions: [
     {

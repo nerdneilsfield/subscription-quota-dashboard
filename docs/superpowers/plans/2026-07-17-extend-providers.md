@@ -401,7 +401,14 @@ function isLoopbackOrPrivateHost(host: string): boolean {
   // Strip port
   const hostname = lower.split(":")[0]!
   if (hostname === "localhost" || hostname === "::1") return true
-  // IPv4 loopback / private
+  // IPv4-mapped IPv6 loopback (::ffff:127.0.0.1)
+  if (hostname.startsWith("::ffff:")) {
+    const v4 = hostname.slice(7)
+    return isLoopbackOrPrivateHost(v4)
+  }
+  // IPv6 ULA (fc00::/7) and link-local (fe80::/10)
+  if (hostname.startsWith("fc") || hostname.startsWith("fd") || hostname.startsWith("fe80")) return true
+  // IPv4 loopback / private / CGNAT
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(hostname)
   if (m) {
     const [a, b] = [Number(m[1]), Number(m[2])]
@@ -410,6 +417,7 @@ function isLoopbackOrPrivateHost(host: string): boolean {
     if (a === 172 && b >= 16 && b <= 31) return true
     if (a === 192 && b === 168) return true
     if (a === 169 && b === 254) return true // link-local / cloud metadata
+    if (a === 100 && b >= 64 && b <= 127) return true // CGNAT RFC 6598
   }
   return false
 }
@@ -563,7 +571,7 @@ git commit -m "refactor: widen provider map type to Map<string, ProviderAdapter>
 - Modify: `src/server/dashboard/project.ts:309-314, 333, 628-656`
 - Test: `tests/dashboard/project.test.ts`
 
-- [ ] **Step 1: Write failing tests for generalized over-limit**
+- [ ] **Step 1: Write failing tests for narrowed over-limit generalization**
 
 Append to `tests/dashboard/project.test.ts`:
 
@@ -599,7 +607,7 @@ test("non-poe gauge-remaining over limit shows ok status (isOverLimit)", () => {
   expect(metric.percentUsed).toBeUndefined()
 })
 
-test("gauge-used over limit shows ok status (isOverLimit)", () => {
+test("gauge-used over limit shows critical (NOT isOverLimit - only gauge-remaining applies)", () => {
   const config = makeConfig({
     providers: [{ id: "vol", type: "volcengine", ak: "a", sk: "s" }],
     subscriptions: [{
@@ -624,10 +632,12 @@ test("gauge-used over limit shows ok status (isOverLimit)", () => {
     config, profileId: "self", generatedAt: NOW,
     selectedRange: "24h", providers,
   })
-  expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("ok")
+  // gauge-used over-limit -> critical via existing used>limit check (project.ts:665-667)
+  // isOverLimit does NOT apply (only gauge-remaining + remaining>limit)
+  expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("critical")
 })
 
-test("percent-based metric at 100% without over-limit shows critical", () => {
+test("percent-based metric at 100% shows critical (NOT isOverLimit)", () => {
   const config = makeConfig({
     providers: [{ id: "mm", type: "minimax", apiKey: "k" }],
     subscriptions: [{
@@ -652,7 +662,7 @@ test("percent-based metric at 100% without over-limit shows critical", () => {
     config, profileId: "self", generatedAt: NOW,
     selectedRange: "24h", providers,
   })
-  // used=100, percentUsed=100, hits critical threshold, NOT isOverLimit (used=100 is not > limit=100)
+  // used=100, percentUsed=100, hits critical threshold, NOT isOverLimit (gauge-remaining only)
   expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("critical")
 })
 ```
@@ -664,7 +674,7 @@ Note: add `ProviderAccountProjection` to the imports at the top of the file if n
 Run: `bun test tests/dashboard/project.test.ts`
 Expected: FAIL (first test: deepseek provider type not registered in test config's provider map; or `isPoeOverLimit` still Poe-specific)
 
-- [ ] **Step 3: Generalize `isPoeOverLimit` to `isOverLimit`**
+- [ ] **Step 3: Generalize `isPoeOverLimit` to `isOverLimit` (narrow - gauge-remaining only)**
 
 In `src/server/dashboard/project.ts`, replace the `isPoeOverLimit` computation in `buildDashboardMetric` (around line 309):
 
@@ -673,18 +683,15 @@ In `src/server/dashboard/project.ts`, replace the `isPoeOverLimit` computation i
   const providerRemaining = config.remaining ?? pm?.remaining
   const providerUsed = config.used ?? pm?.used
 
-  // Over-limit: balance/used exceeds configured limit. Generalized from
-  // Poe-specific to cover gauge-remaining (balance > limit), gauge-used
-  // (used > limit), and percent-based (used >= limit, e.g. limit=100).
+  // Over-limit: ONLY applies to gauge-remaining where remaining > limit
+  // (the Poe-style quirk where purchased credits exceed plan limit).
+  // Do NOT extend to gauge-used or percent-based: those have legitimate
+  // used>=limit states that should show critical via threshold logic.
   const isOverLimit =
-    (pm?.sourceValueKind === "gauge-remaining" &&
-      limit !== undefined && providerRemaining !== undefined &&
-      providerRemaining > limit) ||
-    (pm?.sourceValueKind === "gauge-used" &&
-      limit !== undefined && providerUsed !== undefined &&
-      providerUsed > limit) ||
-    (limit !== undefined && providerUsed !== undefined && limit > 0 &&
-      providerUsed >= limit && pm?.sourceValueKind !== "status")
+    pm?.sourceValueKind === "gauge-remaining" &&
+    limit !== undefined &&
+    providerRemaining !== undefined &&
+    providerRemaining > limit
 
   let used: number | undefined = providerUsed
   let remaining: number | undefined = providerRemaining
@@ -828,6 +835,21 @@ test("deepseek parses balance_infos[0].total_balance", async () => {
   expect(result.errors).toBeUndefined()
 })
 
+test("deepseek emits all balance_infos entries", async () => {
+  const fakeFetch = async (): Promise<Response> =>
+    makeResp(200, {
+      is_available: true,
+      balance_infos: [
+        { currency: "CNY", total_balance: 42.5 },
+        { currency: "USD", total_balance: 10 },
+      ],
+    })
+  const result = await createDeepseekProvider(fakeFetch).refresh(buildInput())
+  expect(result.metrics).toHaveLength(2)
+  expect(result.metrics[0]!.remaining).toBe(42.5)
+  expect(result.metrics[1]!.remaining).toBe(10)
+})
+
 test("deepseek handles numeric string total_balance", async () => {
   const fakeFetch = async (): Promise<Response> =>
     makeResp(200, { is_available: true, balance_infos: [{ currency: "CNY", total_balance: "100.5" }] })
@@ -933,8 +955,8 @@ export function createDeepseekProvider(fetchImpl: typeof fetch = fetch): Provide
         return { ...base, errors: [{ message: "DeepSeek balance request network error", retryable: true }] }
       }
 
-      const metric = mapBalance(body, input.metrics)
-      return { ...base, metrics: metric ? [metric] : [] }
+      const metrics = mapBalance(body, input.metrics)
+      return { ...base, metrics }
     },
   }
 }
@@ -942,24 +964,27 @@ export function createDeepseekProvider(fetchImpl: typeof fetch = fetch): Provide
 function mapBalance(
   body: { is_available?: boolean; balance_infos?: Array<{ currency?: string; total_balance?: unknown }> },
   metrics: MetricConfig[],
-): NormalizedMetric | undefined {
-  const info = body.balance_infos?.[0]
-  if (!info) return undefined
-  const remaining = parseNumber(info.total_balance)
-  if (remaining === undefined) return undefined
-  const cfg = metrics.find((m) => m.providerMetricId === BALANCE_METRIC_ID) ?? metrics[0]
-  const metric: NormalizedMetric = {
-    providerMetricId: BALANCE_METRIC_ID,
-    label: cfg?.label ?? "Balance",
-    unit: cfg?.unit ?? "CNY",
-    remaining,
-    sourceValueKind: "gauge-remaining",
-    sourceConfidence: "known",
+): NormalizedMetric[] {
+  const infos = body.balance_infos ?? []
+  const result: NormalizedMetric[] = []
+  for (const info of infos) {
+    const remaining = parseNumber(info.total_balance)
+    if (remaining === undefined) continue
+    const cfg = metrics.find((m) => m.providerMetricId === BALANCE_METRIC_ID) ?? metrics[0]
+    const metric: NormalizedMetric = {
+      providerMetricId: BALANCE_METRIC_ID,
+      label: cfg?.label ?? "Balance",
+      unit: cfg?.unit ?? "CNY",
+      remaining,
+      sourceValueKind: "gauge-remaining",
+      sourceConfidence: "known",
+    }
+    if (body.is_available === false) {
+      metric.notes = "Insufficient balance"
+    }
+    result.push(metric)
   }
-  if (body.is_available === false) {
-    metric.notes = "Insufficient balance"
-  }
-  return metric
+  return result
 }
 ```
 
@@ -1329,20 +1354,22 @@ export function createSiliconflowProvider(fetchImpl: typeof fetch = fetch): Prov
       if (!body.data) {
         return { ...base, errors: [{ message: "SiliconFlow response missing 'data' field", retryable: false }] }
       }
-      const metric = mapBalance(body.data, input.metrics)
+      const metric = mapBalance(body.data, baseUrl, input.metrics)
       return { ...base, metrics: metric ? [metric] : [] }
     },
   }
 }
 
-function mapBalance(data: { totalBalance?: unknown }, metrics: MetricConfig[]): NormalizedMetric | undefined {
+function mapBalance(data: { totalBalance?: unknown }, baseUrl: string, metrics: MetricConfig[]): NormalizedMetric | undefined {
   const remaining = parseNumber(data.totalBalance)
   if (remaining === undefined) return undefined
   const cfg = metrics.find((m) => m.providerMetricId === BALANCE_METRIC_ID) ?? metrics[0]
+  // Auto-derive unit from host: .cn -> CNY, .com -> USD (matches cc-switch balance.rs:260)
+  const defaultUnit = baseUrl.includes("api.siliconflow.cn") ? "CNY" : "USD"
   return {
     providerMetricId: BALANCE_METRIC_ID,
     label: cfg?.label ?? "Balance",
-    unit: cfg?.unit ?? "CNY",
+    unit: cfg?.unit ?? defaultUnit,
     remaining,
     sourceValueKind: "gauge-remaining",
     sourceConfidence: "known",

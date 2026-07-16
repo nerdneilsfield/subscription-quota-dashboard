@@ -17,6 +17,7 @@ import { createKimiProvider } from "./providers/kimi"
 import { createZhipuProvider } from "./providers/zhipu"
 import { createMiniMaxProvider } from "./providers/minimax"
 import { createZenmuxProvider } from "./providers/zenmux"
+import { createVolcengineProvider } from "./providers/volcengine"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 
@@ -44,6 +45,7 @@ async function main(): Promise<void> {
     ["zhipu", createZhipuProvider()],
     ["minimax", createMiniMaxProvider()],
     ["zenmux", createZenmuxProvider()],
+    ["volcengine", createVolcengineProvider()],
   ])
 
   const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)

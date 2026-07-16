@@ -22,7 +22,7 @@ import { createRefreshService } from "../refresh/refresh-service"
 export type AppDeps = {
   config: NormalizedConfig
   storage: DashboardStorage
-  providers: Map<"manual" | "poe", ProviderAdapter>
+  providers: Map<string, ProviderAdapter>
   sessionSecret: string
   now?: () => Date
   staticDir?: string

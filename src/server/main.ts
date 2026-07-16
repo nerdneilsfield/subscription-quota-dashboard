@@ -8,6 +8,7 @@ import { openDashboardDatabase } from "./storage/database"
 import { createRepositories } from "./storage/repositories"
 import { createManualProvider } from "./providers/manual"
 import { createPoeProvider } from "./providers/poe"
+import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 
 const port = Number(process.env.PORT ?? 3000)
@@ -22,7 +23,7 @@ async function main(): Promise<void> {
   const db = openDashboardDatabase(resolve(dbPath))
   const storage = createRepositories(db)
 
-  const providers = new Map<"manual" | "poe", ReturnType<typeof createManualProvider>>([
+  const providers = new Map<string, ProviderAdapter>([
     ["manual", createManualProvider()],
     ["poe", createPoeProvider()],
   ])

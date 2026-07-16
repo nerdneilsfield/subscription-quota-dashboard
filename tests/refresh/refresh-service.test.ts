@@ -213,7 +213,7 @@ test("three concurrent provider accounts with cap 2 do not start the third until
   })
   const { storage } = spyStorage(makeStorage())
   const providers = new Map<string, ProviderAdapter>([["poe", adapter], ["manual", { type: "manual", async refresh(i) { return okResult(i.providerAccountId, []) } }]])
-  const svc = createRefreshService({ config, storage, providers, now: fixedNow })
+  const svc = createRefreshService({ config, storage, providers, now: fixedNow, concurrencyLimit: 2 })
 
   const promise = svc.refreshProfile({ profileId: "all", ip: "1.1.1.1" })
   await flush()

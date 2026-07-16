@@ -76,7 +76,7 @@ function buildImportStateInput(rec: { maxCreationTime?: number; importedQueryIds
 
 export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
   const { config, storage, providers, now } = deps
-  const concurrencyLimit = deps.concurrencyLimit ?? 2
+  const concurrencyLimit = deps.concurrencyLimit ?? 8
   const rateLimiter = deps.rateLimiter
 
   // Singleflight: in-flight provider-account refresh promises.

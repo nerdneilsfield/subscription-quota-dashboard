@@ -9,6 +9,7 @@ import { createRepositories } from "./storage/repositories"
 import { createManualProvider } from "./providers/manual"
 import { createPoeProvider } from "./providers/poe"
 import { createDeepseekProvider } from "./providers/deepseek"
+import { createStepfunProvider } from "./providers/stepfun"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
     ["manual", createManualProvider()],
     ["poe", createPoeProvider()],
     ["deepseek", createDeepseekProvider()],
+    ["stepfun", createStepfunProvider()],
   ])
 
   const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)

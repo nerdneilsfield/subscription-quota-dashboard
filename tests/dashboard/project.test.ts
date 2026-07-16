@@ -4,7 +4,7 @@ import { buildMetricKey } from "../../src/shared/metric-key"
 import { loadDashboardConfig } from "../../src/server/config/load-config"
 import type { DashboardConfigInput, MetricConfig } from "../../src/shared/domain"
 import type { NormalizedMetric, ProviderHistoryEvent } from "../../src/server/providers/types"
-import type { ProviderCacheSummary } from "../../src/server/dashboard/project"
+import type { ProviderAccountProjection, ProviderCacheSummary } from "../../src/server/dashboard/project"
 
 const NOW = "2026-06-25T12:00:00Z"
 
@@ -765,4 +765,94 @@ test("payload exposes generatedAt and selectedRange defaults to 24h", () => {
   expect(payload.selectedRange).toBe("24h")
   expect(payload.ranges).toEqual(["1h", "24h", "7d", "30d"])
   expect(payload.profile).toEqual({ id: "self", name: "Personal" })
+})
+
+test("non-poe gauge-remaining over limit shows ok status (isOverLimit)", () => {
+  const config = makeConfig({
+    providers: [{ id: "ds", type: "deepseek", apiKey: "k" }],
+    subscriptions: [{
+      id: "ds-sub", name: "DS", providerId: "ds",
+      metrics: [{
+        id: "bal", providerMetricId: "balance", label: "Balance", unit: "CNY",
+        limit: 50, sourceValueKind: "gauge-remaining",
+        display: { module: "balance-card" },
+      }],
+    }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["ds-sub"] }],
+  })
+  const providers: ProviderAccountProjection[] = [{
+    providerAccountId: "ds",
+    metrics: [{
+      providerMetricId: "balance", label: "Balance", unit: "CNY",
+      remaining: 100, sourceValueKind: "gauge-remaining", sourceConfidence: "known",
+    }],
+    cache: okCache,
+  }]
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW,
+    selectedRange: "24h", providers,
+  })
+  const metric = payload.subscriptions[0]!.metrics[0]!
+  expect(metric.status).toBe("ok")
+  expect(metric.used).toBe(0)
+  expect(metric.percentUsed).toBeUndefined()
+})
+
+test("gauge-used over limit shows critical (NOT isOverLimit - only gauge-remaining applies)", () => {
+  const config = makeConfig({
+    providers: [{ id: "vol", type: "volcengine", ak: "a", sk: "s" }],
+    subscriptions: [{
+      id: "vol-sub", name: "Vol", providerId: "vol",
+      metrics: [{
+        id: "afp", providerMetricId: "afp:5h", label: "AFP 5h", unit: "tokens",
+        limit: 1000, sourceValueKind: "gauge-used",
+        display: { module: "period-quota-card" },
+      }],
+    }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["vol-sub"] }],
+  })
+  const providers: ProviderAccountProjection[] = [{
+    providerAccountId: "vol",
+    metrics: [{
+      providerMetricId: "afp:5h", label: "AFP 5h", unit: "tokens",
+      used: 1500, limit: 1000, sourceValueKind: "gauge-used", sourceConfidence: "known",
+    }],
+    cache: okCache,
+  }]
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW,
+    selectedRange: "24h", providers,
+  })
+  // gauge-used over-limit -> critical via existing used>limit check (project.ts:665-667)
+  // isOverLimit does NOT apply (only gauge-remaining + remaining>limit)
+  expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("critical")
+})
+
+test("percent-based metric at 100% shows critical (NOT isOverLimit)", () => {
+  const config = makeConfig({
+    providers: [{ id: "mm", type: "minimax", apiKey: "k" }],
+    subscriptions: [{
+      id: "mm-sub", name: "MM", providerId: "mm",
+      metrics: [{
+        id: "5h", providerMetricId: "five_hour", label: "5h", unit: "%",
+        limit: 100, sourceValueKind: "gauge-remaining",
+        display: { module: "rolling-window-card", thresholds: { criticalPercentUsed: 95 } },
+      }],
+    }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["mm-sub"] }],
+  })
+  const providers: ProviderAccountProjection[] = [{
+    providerAccountId: "mm",
+    metrics: [{
+      providerMetricId: "five_hour", label: "5h", unit: "%",
+      remaining: 0, limit: 100, sourceValueKind: "gauge-remaining", sourceConfidence: "known",
+    }],
+    cache: okCache,
+  }]
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW,
+    selectedRange: "24h", providers,
+  })
+  // used=100, percentUsed=100, hits critical threshold, NOT isOverLimit (gauge-remaining only)
+  expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("critical")
 })

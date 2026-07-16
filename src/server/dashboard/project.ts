@@ -305,9 +305,11 @@ function buildDashboardMetric(
   const providerRemaining = config.remaining ?? pm?.remaining
   const providerUsed = config.used ?? pm?.used
 
-  // Poe balance over configured limit: display used=0, omit percentUsed, ok status.
-  const isPoeOverLimit =
-    providerType === "poe" &&
+  // Over-limit: ONLY applies to gauge-remaining where remaining > limit
+  // (the Poe-style quirk where purchased credits exceed plan limit).
+  // Do NOT extend to gauge-used or percent-based: those have legitimate
+  // used>=limit states that should show critical via threshold logic.
+  const isOverLimit =
     pm?.sourceValueKind === "gauge-remaining" &&
     limit !== undefined &&
     providerRemaining !== undefined &&
@@ -315,14 +317,14 @@ function buildDashboardMetric(
 
   let used: number | undefined = providerUsed
   let remaining: number | undefined = providerRemaining
-  if (isPoeOverLimit) {
+  if (isOverLimit) {
     used = 0
   } else if (used === undefined && limit !== undefined && remaining !== undefined) {
     used = Math.max(0, limit - remaining)
   }
 
   let percentUsed: number | undefined
-  if (!isPoeOverLimit && limit !== undefined && limit > 0 && used !== undefined) {
+  if (!isOverLimit && limit !== undefined && limit > 0 && used !== undefined) {
     percentUsed = (used / limit) * 100
   }
 
@@ -337,7 +339,7 @@ function buildDashboardMetric(
     limit,
     used,
     percentUsed,
-    isPoeOverLimit,
+    isOverLimit,
     window,
     generatedAt,
     thresholds: config.display.thresholds,
@@ -632,12 +634,12 @@ function computeMetricStatus(input: {
   limit: number | undefined
   used: number | undefined
   percentUsed: number | undefined
-  isPoeOverLimit: boolean
+  isOverLimit: boolean
   window: DashboardWindow | undefined
   generatedAt: string
   thresholds: MetricConfig["display"]["thresholds"] | undefined
 }): MetricStatus {
-  const { cache, providerMetric, limit, used, percentUsed, isPoeOverLimit, window, generatedAt, thresholds } = input
+  const { cache, providerMetric, limit, used, percentUsed, isOverLimit, window, generatedAt, thresholds } = input
 
   // Fixed window past resetAt -> expired.
   if (window?.kind === "fixed" && window.resetAt && Date.parse(window.resetAt) <= Date.parse(generatedAt)) {
@@ -647,8 +649,8 @@ function computeMetricStatus(input: {
   if (!providerMetric) return "unavailable"
   if (cache?.status === "unavailable") return "unavailable"
 
-  if (isPoeOverLimit) {
-    // Poe over-limit: status ok unless stale forces a higher-precedence mark.
+  if (isOverLimit) {
+    // Over-limit: status ok unless stale forces a higher-precedence mark.
     if (cache?.staleAfter && Date.parse(cache.staleAfter) < Date.parse(generatedAt)) {
       return "stale"
     }

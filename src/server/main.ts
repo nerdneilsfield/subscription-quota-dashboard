@@ -16,6 +16,7 @@ import { createNovitaProvider } from "./providers/novita"
 import { createKimiProvider } from "./providers/kimi"
 import { createZhipuProvider } from "./providers/zhipu"
 import { createMiniMaxProvider } from "./providers/minimax"
+import { createZenmuxProvider } from "./providers/zenmux"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 
@@ -42,6 +43,7 @@ async function main(): Promise<void> {
     ["kimi", createKimiProvider()],
     ["zhipu", createZhipuProvider()],
     ["minimax", createMiniMaxProvider()],
+    ["zenmux", createZenmuxProvider()],
   ])
 
   const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)

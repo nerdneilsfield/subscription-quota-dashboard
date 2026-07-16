@@ -110,3 +110,67 @@ test("infers manual sourceValueKind", () => {
   const metrics = config.subscriptions.get("manual")!.metrics
   expect(metrics.map((metric) => metric.sourceValueKind)).toEqual(["gauge-used", "gauge-remaining", "status"])
 })
+
+test("deepseek provider resolves apiKeyEnv", () => {
+  process.env.DEEPSEEK_TEST_KEY = "ds-secret"
+  const config = loadDashboardConfig({
+    providers: [{ id: "ds", type: "deepseek", apiKeyEnv: "DEEPSEEK_TEST_KEY" }],
+    subscriptions: [{ id: "ds-sub", name: "DS", providerId: "ds", metrics: [{ id: "bal", label: "Balance", unit: "CNY", display: { module: "balance-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["ds-sub"] }],
+  })
+  expect(config.providerRuntime.get("ds")?.available).toBe(true)
+  expect(config.providerRuntime.get("ds")?.apiKey).toBe("ds-secret")
+  delete process.env.DEEPSEEK_TEST_KEY
+})
+
+test("deepseek provider unavailable when env missing and no fallback", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "ds", type: "deepseek", apiKeyEnv: "DEEPSEEK_MISSING_KEY" }],
+    subscriptions: [{ id: "ds-sub", name: "DS", providerId: "ds", metrics: [{ id: "bal", label: "Balance", unit: "CNY", display: { module: "balance-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["ds-sub"] }],
+  })
+  expect(config.providerRuntime.get("ds")?.available).toBe(false)
+  expect(config.providerRuntime.get("ds")?.reason).toContain("DEEPSEEK_MISSING_KEY")
+})
+
+test("siliconflow rejects loopback baseUrl (SSRF)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "sf", type: "siliconflow", baseUrl: "http://127.0.0.1:8080", apiKey: "k" }],
+    subscriptions: [{ id: "sf-sub", name: "SF", providerId: "sf", metrics: [{ id: "bal", label: "B", unit: "CNY", display: { module: "balance-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["sf-sub"] }],
+  })).toThrow("baseUrl")
+})
+
+test("siliconflow rejects non-allowlisted host (SSRF)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "sf", type: "siliconflow", baseUrl: "https://api.evil.com", apiKey: "k" }],
+    subscriptions: [{ id: "sf-sub", name: "SF", providerId: "sf", metrics: [{ id: "bal", label: "B", unit: "CNY", display: { module: "balance-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["sf-sub"] }],
+  })).toThrow("baseUrl")
+})
+
+test("siliconflow accepts allowlisted CN host", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "sf", type: "siliconflow", baseUrl: "https://api.siliconflow.cn", apiKey: "k" }],
+    subscriptions: [{ id: "sf-sub", name: "SF", providerId: "sf", metrics: [{ id: "bal", label: "B", unit: "CNY", display: { module: "balance-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["sf-sub"] }],
+  })
+  expect(config.providerRuntime.get("sf")?.available).toBe(true)
+})
+
+test("zenmux rejects private IP baseUrl (SSRF)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://10.0.0.1", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("baseUrl")
+})
+
+test("zenmux accepts arbitrary public host", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "https://my-zenmux.example.com", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })
+  expect(config.providerRuntime.get("zm")?.available).toBe(true)
+})

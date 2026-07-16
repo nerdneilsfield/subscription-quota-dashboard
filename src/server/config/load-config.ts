@@ -20,6 +20,98 @@ const VALID_DISPLAY_MODULES = new Set<string>([
   "manual-status-card",
 ])
 
+const PROVIDER_HOST_ALLOWLIST: Record<string, string[]> = {
+  siliconflow: ["api.siliconflow.cn", "api.siliconflow.com"],
+  zhipu: ["open.bigmodel.cn", "api.z.ai"],
+  minimax: ["api.minimaxi.com", "api.minimax.io"],
+}
+
+const BEARER_PROVIDER_TYPES = new Set([
+  "poe", "deepseek", "stepfun", "siliconflow", "openrouter", "novita",
+  "kimi", "zhipu", "minimax", "zenmux",
+])
+
+function resolveBearerCredential(
+  provider: { apiKeyEnv?: string | undefined; apiKey?: string | undefined },
+): { apiKey?: string | undefined; reason?: string | undefined } {
+  const envName = provider.apiKeyEnv
+  let apiKey: string | undefined
+  let reason: string | undefined
+  if (envName !== undefined) {
+    const fromEnv = process.env[envName]
+    if (fromEnv !== undefined && fromEnv !== "") {
+      apiKey = fromEnv
+    } else if (provider.apiKey !== undefined) {
+      apiKey = provider.apiKey
+    } else {
+      reason = `environment variable ${envName} is not set and no apiKey fallback was provided`
+    }
+  } else if (provider.apiKey !== undefined) {
+    apiKey = provider.apiKey
+  } else {
+    reason = "no apiKeyEnv or apiKey configured"
+  }
+  const result: { apiKey?: string; reason?: string } = {}
+  if (apiKey !== undefined) result.apiKey = apiKey
+  if (reason !== undefined) result.reason = reason
+  return result
+}
+
+function resolveAkSkCredential(
+  provider: { akEnv?: string | undefined; ak?: string | undefined; skEnv?: string | undefined; sk?: string | undefined },
+): { ak?: string | undefined; sk?: string | undefined; reason?: string | undefined } {
+  const ak = resolveBearerCredential({ apiKeyEnv: provider.akEnv, apiKey: provider.ak })
+  const sk = resolveBearerCredential({ apiKeyEnv: provider.skEnv, apiKey: provider.sk })
+  if (ak.apiKey !== undefined && sk.apiKey !== undefined) {
+    return { ak: ak.apiKey, sk: sk.apiKey }
+  }
+  return { reason: ak.reason ?? sk.reason ?? "missing AK or SK" }
+}
+
+function isLoopbackOrPrivateHost(host: string): boolean {
+  const lower = host.toLowerCase()
+  // Strip port
+  const hostname = lower.split(":")[0]!
+  if (hostname === "localhost" || hostname === "::1") return true
+  // IPv4-mapped IPv6 loopback (::ffff:127.0.0.1)
+  if (hostname.startsWith("::ffff:")) {
+    const v4 = hostname.slice(7)
+    return isLoopbackOrPrivateHost(v4)
+  }
+  // IPv6 ULA (fc00::/7) and link-local (fe80::/10)
+  if (hostname.startsWith("fc") || hostname.startsWith("fd") || hostname.startsWith("fe80")) return true
+  // IPv4 loopback / private / CGNAT
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(hostname)
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])]
+    if (a === 127) return true
+    if (a === 10) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    if (a === 169 && b === 254) return true // link-local / cloud metadata
+    if (a === 100 && b >= 64 && b <= 127) return true // CGNAT RFC 6598
+  }
+  return false
+}
+
+function validateBaseUrl(baseUrl: string | undefined, providerType: string, path: string): void {
+  if (baseUrl === undefined) return
+  let parsed: URL
+  try {
+    parsed = new URL(baseUrl)
+  } catch {
+    fail(path, `baseUrl "${baseUrl}" is not a valid URL`)
+  }
+  const host = parsed.hostname.toLowerCase()
+  if (isLoopbackOrPrivateHost(host)) {
+    fail(path, `baseUrl host "${host}" is loopback or private (SSRF defense)`)
+  }
+  const allowlist = PROVIDER_HOST_ALLOWLIST[providerType]
+  if (allowlist !== undefined && !allowlist.includes(host)) {
+    fail(path, `baseUrl host "${host}" not in allowlist for ${providerType}: ${allowlist.join(", ")}`)
+  }
+}
+
 function fail(path: string, message: string): never {
   throw new Error(`Invalid dashboard config: ${path}: ${message}`)
 }
@@ -88,30 +180,39 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
     if (providers.has(provider.id)) {
       fail(`providers[${provider.id}]`, "duplicate provider id")
     }
-    if (provider.type === "poe") {
-      const envName = provider.apiKeyEnv
-      let apiKey: string | undefined
-      let reason: string | undefined
-      if (envName !== undefined) {
-        const fromEnv = process.env[envName]
-        if (fromEnv !== undefined && fromEnv !== "") {
-          apiKey = fromEnv
-        } else if (provider.apiKey !== undefined) {
-          apiKey = provider.apiKey
-        } else {
-          reason = `environment variable ${envName} is not set and no apiKey fallback was provided`
-        }
-      } else if (provider.apiKey !== undefined) {
-        apiKey = provider.apiKey
-      } else {
-        reason = "no apiKeyEnv or apiKey configured"
+    const providerPath = `providers[${provider.id}]`
+
+    if (provider.type === "volcengine") {
+      const region = provider.region ?? "cn-beijing"
+      const { ak, sk, reason } = resolveAkSkCredential(provider)
+      const state: ProviderRuntimeState =
+        ak !== undefined && sk !== undefined
+          ? { available: true, ak, sk }
+          : { available: false, reason: reason ?? "missing AK or SK" }
+      providers.set(provider.id, { ...provider, region })
+      providerRuntime.set(provider.id, state)
+    } else if (BEARER_PROVIDER_TYPES.has(provider.type)) {
+      // Validate baseUrl for providers that accept it
+      if ("baseUrl" in provider && provider.baseUrl !== undefined) {
+        validateBaseUrl(provider.baseUrl, provider.type, `${providerPath}.baseUrl`)
       }
+      // zenmux requires baseUrl
+      if (provider.type === "zenmux" && !("baseUrl" in provider) ) {
+        fail(`${providerPath}.baseUrl`, "zenmux requires baseUrl")
+      }
+      if (provider.type === "zenmux" && provider.baseUrl === undefined) {
+        fail(`${providerPath}.baseUrl`, "zenmux requires baseUrl")
+      }
+      const { apiKey, reason } = resolveBearerCredential(
+        provider as { apiKeyEnv?: string | undefined; apiKey?: string | undefined },
+      )
       const state: ProviderRuntimeState = { available: apiKey !== undefined }
       if (apiKey !== undefined) state.apiKey = apiKey
       if (reason !== undefined) state.reason = reason
       providers.set(provider.id, provider)
       providerRuntime.set(provider.id, state)
     } else {
+      // manual
       providers.set(provider.id, provider)
       providerRuntime.set(provider.id, { available: true })
     }

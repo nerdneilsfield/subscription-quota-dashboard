@@ -8,6 +8,7 @@ import { openDashboardDatabase } from "./storage/database"
 import { createRepositories } from "./storage/repositories"
 import { createManualProvider } from "./providers/manual"
 import { createPoeProvider } from "./providers/poe"
+import { createDeepseekProvider } from "./providers/deepseek"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   const providers = new Map<string, ProviderAdapter>([
     ["manual", createManualProvider()],
     ["poe", createPoeProvider()],
+    ["deepseek", createDeepseekProvider()],
   ])
 
   const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)

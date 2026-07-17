@@ -12,6 +12,8 @@ type VolcengineProvider = { id: string; type: "volcengine"; region?: string | un
 const DEFAULT_REGION = "cn-beijing"
 
 // Auth-error code keywords (lowercased contains match). Per cc-switch coding_plan.rs:749-759.
+// Matches cc-switch exactly, including "denied". Rate-limit "RequestDenied" errors are rare
+// in Volcengine OpenAPI; auth errors are far more common and the false-positive risk is low.
 const AUTH_ERROR_KEYWORDS = ["auth", "signature", "accessdenied", "denied", "unauthorized", "forbidden", "credential", "token"]
 
 export function createVolcengineProvider(fetchImpl: typeof fetch = fetch): ProviderAdapter {
@@ -37,23 +39,39 @@ export function createVolcengineProvider(fetchImpl: typeof fetch = fetch): Provi
 
       // 1) GetAFPUsage
       const afpResult = await callOpenApi(fetchImpl, ak, sk, region, "GetAFPUsage", now)
-      if ("error" in afpResult) return { ...base, errors: [afpResult.error] }
-
-      const afpTiers = parseAfpTiers(afpResult.body, input.metrics)
-      if (afpTiers.length > 0) {
-        const planType = extractPlanType(afpResult.body)
-        const notes = planType ? `Agent Plan ${planType}` : undefined
-        if (notes) for (const m of afpTiers) m.notes = notes
-        return { ...base, metrics: afpTiers }
+      if ("body" in afpResult) {
+        const afpTiers = parseAfpTiers(afpResult.body, input.metrics)
+        if (afpTiers.length > 0) {
+          const planType = extractPlanType(afpResult.body)
+          const notes = planType ? `Agent Plan ${planType}` : undefined
+          if (notes) for (const m of afpTiers) m.notes = notes
+          return { ...base, metrics: afpTiers }
+        }
+        // AFP returned empty (no Agent Plan) -> fall through to CodingPlan
       }
+      // AFP soft/transient error -> collect and try CodingPlan as fallback
+      // (matches cc-switch: Soft errors are accumulated, not fatal)
+      const afpError = "error" in afpResult ? afpResult.error : undefined
 
       // 2) Fallback: GetCodingPlanUsage
       const cpResult = await callOpenApi(fetchImpl, ak, sk, region, "GetCodingPlanUsage", now)
-      if ("error" in cpResult) return { ...base, errors: [cpResult.error] }
+      if ("body" in cpResult) {
+        const cpTiers = parseCodingPlanTiers(cpResult.body, input.metrics)
+        if (cpTiers.length > 0) {
+          for (const m of cpTiers) m.notes = "Coding Plan"
+          return { ...base, metrics: cpTiers }
+        }
+      }
 
-      const cpTiers = parseCodingPlanTiers(cpResult.body, input.metrics)
-      for (const m of cpTiers) m.notes = "Coding Plan"
-      return { ...base, metrics: cpTiers }
+      // Both calls failed or returned empty
+      const cpError = "error" in cpResult ? cpResult.error : undefined
+      // Auth errors from either call are fatal (non-retryable)
+      if (afpError && !afpError.retryable) return { ...base, errors: [afpError] }
+      if (cpError && !cpError.retryable) return { ...base, errors: [cpError] }
+      // Prefer the first error if both are retryable; otherwise report both empty
+      if (afpError) return { ...base, errors: [afpError] }
+      if (cpError) return { ...base, errors: [cpError] }
+      return { ...base, errors: [{ message: "Volcengine: no active Agent Plan or Coding Plan subscription found", retryable: false }] }
     },
   }
 }
@@ -123,7 +141,7 @@ function extractError(body: unknown): { code: string; message: string } | undefi
   return { code, message }
 }
 
-function isAuthErrorCode(code: string): boolean {
+export function isAuthErrorCode(code: string): boolean {
   const lower = code.toLowerCase()
   return AUTH_ERROR_KEYWORDS.some((kw) => lower.includes(kw))
 }

@@ -174,3 +174,78 @@ test("zenmux accepts arbitrary public host", () => {
   })
   expect(config.providerRuntime.get("zm")?.available).toBe(true)
 })
+
+// --- IPv6 SSRF tests ---
+
+test("SSRF rejects IPv6 loopback [::1]", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[::1]:8080", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv6 link-local [fe80::1]", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[fe80::1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv6 link-local [fe90::1] (fe80::/10)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[fe90::1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv6 ULA [fc00::1]", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[fc00::1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv6 ULA [fd00::1]", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[fd00::1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv4-mapped IPv6 [::ffff:127.0.0.1]", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[::ffff:127.0.0.1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv6 unspecified [::]", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[::]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects CGNAT 100.64.0.1", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://100.64.0.1", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF does not false-positive on valid host starting with 'fc'", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "https://fc-proxy.example.com", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })
+  expect(config.providerRuntime.get("zm")?.available).toBe(true)
+})

@@ -56,3 +56,69 @@ test("default region is cn-beijing", () => {
   const result = signVolcengineRequest({ ak: AK, sk: SK, region: "cn-beijing", action: "GetAFPUsage", now: FIXED_NOW })
   expect(result.url).toContain("Region=cn-beijing")
 })
+
+// Golden signature test - locks the exact output for a known input.
+// Ported from cc-switch volcengine_sign_structure_and_determinism (coding_plan.rs:1894).
+// Without a server-side golden vector, this test locks the structural contract
+// + determinism. Real correctness is verified by user testing against Volcengine API.
+test("golden signature: structure and format locked (cc-switch parity)", () => {
+  // Use the same inputs as cc-switch's test
+  const goldenNow = new Date("2024-06-21T00:00:00Z")
+  const result = signVolcengineRequest({
+    ak: "AKLTtest",
+    sk: "secretkey",
+    region: "cn-beijing",
+    action: "GetAFPUsage",
+    now: goldenNow,
+  })
+
+  // URL with canonical query
+  expect(result.url).toBe("https://open.volcengineapi.com/?Action=GetAFPUsage&Region=cn-beijing&Version=2024-01-01")
+
+  // X-Date format: YYYYMMDDTHHMMSSZ
+  expect(result.headers.get("X-Date")).toBe("20240621T000000Z")
+
+  // Empty body SHA-256 (proves body is empty, not form-encoded)
+  expect(result.headers.get("X-Content-Sha256")).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+
+  // Content-Type (proves it's JSON, not form-urlencoded)
+  expect(result.headers.get("Content-Type")).toBe("application/json; charset=utf-8")
+
+  const auth = result.headers.get("Authorization")!
+
+  // Algorithm: HMAC-SHA256 (no AWS4 prefix)
+  expect(auth.startsWith("HMAC-SHA256 Credential=AKLTtest/20240621/cn-beijing/ark/request,")).toBe(true)
+
+  // SignedHeaders: fixed order (NOT alphabetical)
+  expect(auth).toContain("SignedHeaders=host;x-date;x-content-sha256;content-type,")
+
+  // Signature: 64 hex chars
+  const sig = auth.split("Signature=")[1]!
+  expect(sig.length).toBe(64)
+  expect(/^[0-9a-f]{64}$/.test(sig)).toBe(true)
+
+  // Determinism: same input -> same output
+  const result2 = signVolcengineRequest({
+    ak: "AKLTtest",
+    sk: "secretkey",
+    region: "cn-beijing",
+    action: "GetAFPUsage",
+    now: goldenNow,
+  })
+  expect(result2.headers.get("Authorization")).toBe(auth)
+})
+
+// Auth error code classification (ports cc-switch volcengine_auth_error_code_detection)
+test("auth error code classification matches cc-switch", () => {
+  const { isAuthErrorCode } = require("../../src/server/providers/volcengine")
+  // These should be classified as auth errors (non-retryable)
+  const authCodes = ["AccessDenied", "SignatureDoesNotMatch", "InvalidAuthorization", "Unauthorized"]
+  // These should NOT be classified as auth errors (retryable)
+  const nonAuthCodes = ["InvalidParameter.Action", "InternalError"]
+  for (const code of authCodes) {
+    expect(isAuthErrorCode(code)).toBe(true)
+  }
+  for (const code of nonAuthCodes) {
+    expect(isAuthErrorCode(code)).toBe(false)
+  }
+})

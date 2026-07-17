@@ -72,8 +72,11 @@ export function createMiniMaxProvider(fetchImpl: typeof fetch = fetch): Provider
         return { ...base, errors: [{ message: `MiniMax API error (code ${baseResp.status_code}): ${msg}`, retryable: false }] }
       }
 
-      // Find general model
-      const general = (body.model_remains ?? []).find((m) => m.model_name === "general")
+      // Find general model (case-insensitive, trimmed - defends against API casing/whitespace drift)
+      const general = (body.model_remains ?? []).find((m) => {
+        const name = typeof m.model_name === "string" ? m.model_name.trim().toLowerCase() : ""
+        return name === "general"
+      })
       if (!general) return { ...base, metrics: [] }
 
       const metrics: NormalizedMetric[] = []

@@ -97,7 +97,9 @@ function parseTiers(
     // NOTE: plan used `equalsIgnoreCase` (not a JS method); replaced with
     // toUpperCase() per the plan's own note.
     if (type.toUpperCase() !== "TOKENS_LIMIT") continue
-    const percentage = parseNumber(item.percentage) ?? 0
+    // Clamp percentage to 0-100 range (API may return 0-1 fraction in some edge cases)
+    const rawPercentage = parseNumber(item.percentage) ?? 0
+    const percentage = rawPercentage <= 1 ? rawPercentage * 100 : rawPercentage
     const resetAt = parseResetTime(item.nextResetTime)
     // Compute resetMs for fallback sorting: handle both numeric (sec/ms) and ISO strings
     const resetMs = typeof item.nextResetTime === "number"

@@ -309,6 +309,8 @@ function buildDashboardMetric(
   // (the Poe-style quirk where purchased credits exceed plan limit).
   // Do NOT extend to gauge-used or percent-based: those have legitimate
   // used>=limit states that should show critical via threshold logic.
+  // When triggered: used is zeroed (display hack) but remaining is preserved
+  // so the UI shows remaining > limit with used=0. percentUsed is omitted.
   const isOverLimit =
     pm?.sourceValueKind === "gauge-remaining" &&
     limit !== undefined &&
@@ -317,6 +319,8 @@ function buildDashboardMetric(
 
   let used: number | undefined = providerUsed
   let remaining: number | undefined = providerRemaining
+  // Note: remaining is intentionally left as-is when isOverLimit (shows the
+  // actual balance); only used is zeroed so percentUsed is not computed.
   if (isOverLimit) {
     used = 0
   } else if (used === undefined && limit !== undefined && remaining !== undefined) {

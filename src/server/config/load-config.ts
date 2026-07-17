@@ -26,7 +26,9 @@ const PROVIDER_HOST_ALLOWLIST: Record<string, string[]> = {
   minimax: ["api.minimaxi.com", "api.minimax.io"],
 }
 
-const BEARER_PROVIDER_TYPES = new Set([
+// Providers that use apiKeyEnv/apiKey credential resolution.
+// Named API_KEY rather than BEARER because Zhipu uses raw key (no Bearer prefix).
+const API_KEY_PROVIDER_TYPES = new Set([
   "poe", "deepseek", "stepfun", "siliconflow", "openrouter", "novita",
   "kimi", "zhipu", "minimax", "zenmux",
 ])
@@ -68,29 +70,46 @@ function resolveAkSkCredential(
   return { reason: ak.reason ?? sk.reason ?? "missing AK or SK" }
 }
 
-function isLoopbackOrPrivateHost(host: string): boolean {
-  const lower = host.toLowerCase()
-  // Strip port
-  const hostname = lower.split(":")[0]!
-  if (hostname === "localhost" || hostname === "::1") return true
-  // IPv4-mapped IPv6 loopback (::ffff:127.0.0.1)
-  if (hostname.startsWith("::ffff:")) {
-    const v4 = hostname.slice(7)
-    return isLoopbackOrPrivateHost(v4)
+function isLoopbackOrPrivateHost(hostname: string): boolean {
+  // URL.hostname already strips the port and returns IPv6 WITHOUT brackets
+  // (e.g. "::1", "fe80::1"). But some runtimes may include brackets; strip them.
+  const h = hostname.toLowerCase().replace(/^\[|]$/g, "")
+  if (h === "localhost") return true
+
+  // IPv4 literal (dotted quad)
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    if (a === 127) return true // loopback
+    if (a === 10) return true // private 10/8
+    if (a === 172 && b >= 16 && b <= 31) return true // private 172.16/12
+    if (a === 192 && b === 168) return true // private 192.168/16
+    if (a === 169 && b === 254) return true // link-local 169.254/16
+    if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64/10
+    return false
   }
-  // IPv6 ULA (fc00::/7) and link-local (fe80::/10) - only for actual IPv6 addresses (contain ":")
-  if (hostname.includes(":") && (hostname.startsWith("fc") || hostname.startsWith("fd") || hostname.startsWith("fe80"))) return true
-  // IPv4 loopback / private / CGNAT
-  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(hostname)
-  if (m) {
-    const [a, b] = [Number(m[1]), Number(m[2])]
-    if (a === 127) return true
-    if (a === 10) return true
-    if (a === 172 && b >= 16 && b <= 31) return true
-    if (a === 192 && b === 168) return true
-    if (a === 169 && b === 254) return true // link-local / cloud metadata
-    if (a === 100 && b >= 64 && b <= 127) return true // CGNAT RFC 6598
-  }
+
+  // IPv6 - must contain ":"
+  if (!h.includes(":")) return false
+
+  // ::1 loopback
+  if (h === "::1") return true
+  // ::ffff:127.0.0.1 etc (IPv4-mapped IPv6)
+  const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h)
+  if (mapped) return isLoopbackOrPrivateHost(mapped[1]!)
+  // ::ffff:0:127.0.0.1 hex variant
+  const mappedHex = /^::ffff:0*7f00:0{0,4}1$/.exec(h)
+  if (mappedHex) return true
+
+  // ULA fc00::/7 (fc or fd prefix)
+  if (h.startsWith("fc") || h.startsWith("fd")) return true
+  // Link-local fe80::/10 (fe80, fe90, fea0, feb0)
+  if (h.startsWith("fe8") || h.startsWith("fe9") || h.startsWith("fea") || h.startsWith("feb")) return true
+  // Multicast ff00::/8 - not private but should be rejected for SSRF
+  if (h.startsWith("ff")) return true
+  // Unspecified ::
+  if (h === "::") return true
+
   return false
 }
 
@@ -196,7 +215,7 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
           : { available: false, reason: reason ?? "missing AK or SK" }
       providers.set(provider.id, { ...provider, region })
       providerRuntime.set(provider.id, state)
-    } else if (BEARER_PROVIDER_TYPES.has(provider.type)) {
+    } else if (API_KEY_PROVIDER_TYPES.has(provider.type)) {
       // Validate baseUrl for providers that accept it
       if ("baseUrl" in provider && provider.baseUrl !== undefined) {
         validateBaseUrl(provider.baseUrl, provider.type, `${providerPath}.baseUrl`)

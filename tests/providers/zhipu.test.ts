@@ -102,3 +102,26 @@ test("zhipu network error retryable", async () => {
   const result = await createZhipuProvider(raw as unknown as FakeFetch).refresh(buildInput())
   expect(result.errors![0]!.retryable).toBe(true)
 })
+
+test("zhipu fallback sorts unclassified numeric seconds reset times", async () => {
+  // Two unclassified TOKENS_LIMIT entries with numeric seconds reset times.
+  // Earlier reset should become five_hour, later reset should become weekly_limit.
+  const raw = async (): Promise<Response> =>
+    makeResp(200, {
+      success: true,
+      data: {
+        limits: [
+          { type: "TOKENS_LIMIT", percentage: 30, nextResetTime: 1752796800 }, // 2025-07-18T00:00:00Z
+          { type: "TOKENS_LIMIT", percentage: 50, nextResetTime: 1752192000 }, // 2025-07-11T00:00:00Z
+        ],
+      },
+    })
+  const result = await createZhipuProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.metrics).toHaveLength(2)
+  const fiveHour = result.metrics.find((m) => m.providerMetricId === "five_hour")!
+  const weekly = result.metrics.find((m) => m.providerMetricId === "weekly_limit")!
+  expect(fiveHour.used).toBe(50) // earlier reset -> five_hour
+  expect(weekly.used).toBe(30) // later reset -> weekly_limit
+  expect(fiveHour.window?.resetAt).toBe("2025-07-11T00:00:00.000Z")
+  expect(weekly.window?.resetAt).toBe("2025-07-18T00:00:00.000Z")
+})

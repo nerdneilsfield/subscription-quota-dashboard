@@ -18,6 +18,7 @@ import { createZhipuProvider } from "./providers/zhipu"
 import { createMiniMaxProvider } from "./providers/minimax"
 import { createZenmuxProvider } from "./providers/zenmux"
 import { createVolcengineProvider } from "./providers/volcengine"
+import { createCliproxyProvider } from "./providers/cliproxy"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 
@@ -46,6 +47,7 @@ async function main(): Promise<void> {
     ["minimax", createMiniMaxProvider()],
     ["zenmux", createZenmuxProvider()],
     ["volcengine", createVolcengineProvider()],
+    ["cliproxy", createCliproxyProvider()],
   ])
 
   const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)

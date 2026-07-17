@@ -269,7 +269,7 @@ Field semantics (from `parseXAIBillingSummary`):
 - `on_demand_cap.val` / `on_demand_used.val` -> on-demand cap / used in cents
 - `current_period.end` -> weekly reset time
 - `billing_period_end` -> monthly reset time
-- Monthly used percent is computed: `min(used, monthly_limit) / monthly_limit * 100`
+- Monthly used percent is computed: `used / monthly_limit * 100` (no Math.min cap -- overage >100% is meaningful)
 - On-demand used percent: `on_demand_used / on_demand_cap * 100`
 
 Fields may be `{val: number}` objects or raw numbers -- `readXAICentFloat` handles both.
@@ -497,7 +497,7 @@ const cacheRecord: ProviderCacheRecord = {
 }
 ```
 
-**Semantics**: on adapter success, `dynamicSubscriptions` is overwritten (including empty array if 0 accounts found). On adapter failure (no `dynamicSubscriptions` returned), the old cached value is preserved (last-good). This matches the existing `normalized_json` preservation behavior.
+**Semantics**: on adapter success, `dynamicSubscriptions` is overwritten (including empty array `[]` if 0 accounts found -- this is a valid JSON array, not null). On adapter failure (no `dynamicSubscriptions` returned), the old cached value is preserved via SQL `coalesce`: `dynamic_subscriptions_json = coalesce(excluded.dynamic_subscriptions_json, provider_cache.dynamic_subscriptions_json)`. This ensures the last-known-good list survives transient failures (5xx, network, timeout).
 
 ### `buildPayloadFromStorage` -- Load Dynamic Snapshots/History
 

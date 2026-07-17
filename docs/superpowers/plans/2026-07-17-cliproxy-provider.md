@@ -1,40 +1,29 @@
-# CLIProxyAPI Provider Implementation Plan
+# CLIProxyAPI Provider Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a CLIProxyAPI provider adapter that discovers upstream accounts (Codex/Claude/Grok) at runtime via CLIProxyAPI's management API and queries their real quota, rendering each account as a dynamic subscription in the dashboard.
+**Goal:** Add a CLIProxyAPI provider adapter that discovers upstream accounts (Codex/Claude/Grok) at runtime and queries their real quota, rendering each account as a dynamic subscription.
 
-**Architecture:** Adapter calls `GET /v0/management/auth-files` to discover accounts, then `POST /v0/management/api-call` per account with `$TOKEN$` substitution to query upstream quota. Returns `dynamicSubscriptions[]` + `metrics[]`. Storage-first pattern: dynamicSubscriptions persisted on `ProviderCacheRecord`. Projection layer merges static + dynamic subscriptions.
+**Architecture:** Adapter calls `GET /v0/management/auth-files` to discover accounts, then `POST /v0/management/api-call` per account with `$TOKEN$` substitution. Returns `dynamicSubscriptions[]` + `metrics[]`. Storage-first: `dynamicSubscriptions` persisted on `ProviderCacheRecord` via `coalesce` upsert (last-good preserved on failure). Projection merges static + dynamic.
 
 **Tech Stack:** Bun, TypeScript (strict, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`), Hono, `bun:test`.
 
 **Spec:** `docs/superpowers/specs/2026-07-17-cliproxy-provider-design.md`
 
----
-
-## File Structure
-
-### New files
-
-| Path | Responsibility |
-|---|---|
-| `src/server/providers/cliproxy.ts` | CLIProxyAPI adapter (auth-files discovery + api-call fan-out + 3 parsers) |
-| `tests/providers/cliproxy.test.ts` | Adapter tests |
-
-### Modified files
-
-| Path | Change |
-|---|---|
-| `src/shared/domain.ts` | `ProfileConfig.dynamicProviderIds?`; `DynamicSubscription` type; `cliproxy` union member |
-| `src/server/providers/types.ts` | `ProviderRefreshResult.dynamicSubscriptions?` |
-| `src/server/storage/schema.ts` | Migration 6: `dynamic_subscriptions_json` column |
-| `src/server/storage/repositories.ts` | `ProviderCacheRecord.dynamicSubscriptions?`; upsert SQL + decode |
-| `src/server/config/load-config.ts` | cliproxy branch + SSRF loopback exemption + `dynamicProviderIds` validation |
-| `src/server/refresh/refresh-service.ts` | `collectVisibleProviderAccounts` union; `writeProviderResult` dynamic snapshots; `buildPayloadFromStorage` dynamic loading |
-| `src/server/dashboard/project.ts` | `projectProviderMetrics` dynamic branch; `synthesizeMetricConfig`; `inferDisplayModule`; summary exclusion |
-| `src/server/main.ts` | Register `cliproxy` adapter |
-| `config/dashboard.config.ts` | Example cliproxy provider |
-| `.env.example` | `CLIPROXY_BASE_URL=`, `CLIPROXY_MGMT_KEY=` |
+**Key decisions from adversarial reviews (K3 4-reviewer + my own):**
+- Upsert uses `coalesce(excluded.dynamic_subscriptions_json, provider_cache.dynamic_subscriptions_json)` -- failure preserves old value
+- Codex `reset_at` is Unix epoch seconds -> `new Date(reset_at * 1000).toISOString()`
+- Codex window classified by `limit_window_seconds` (18000->5h, 604800->7d, 2592000->30d, other->skip), NOT hardcoded primary/secondary
+- Claude `utilization` is 0-100, used directly (NO ×100)
+- Grok: two endpoints (weekly+monthly) merged, 5 required headers
+- `inferDisplayModule` honors `suggestedDisplayModule` first
+- xai monthly percent: `used / monthly_limit * 100` (no Math.min cap)
+- Storage uses existing `ProviderCacheRow` type + `decodeProviderCache` (NOT `db.prepare`)
+- Config: `} else if (provider.type === "cliproxy") {` (not standalone `if`)
+- SSRF: only `localhost`/`127.x`/`::1` exempted (NOT `::`)
+- Failed accounts still produce DynamicSubscription with error metric; error also pushed to `result.errors[]` for badge escalation
+- `dynamic` flag on `ProjectedMetric` for summary exclusion (NOT string prefix)
+- Concurrency: cap 6, per-call AbortController 70s, overall deadline 120s, fast-fail on all-401 batch
 
 ---
 
@@ -44,7 +33,7 @@
 - Modify: `src/shared/domain.ts`
 - Modify: `src/server/providers/types.ts`
 
-- [ ] **Step 1: Add `cliproxy` to `ProviderAccountConfig` union and `DynamicSubscription` type**
+- [ ] **Step 1: Add types to domain.ts**
 
 In `src/shared/domain.ts`, add to the `ProviderAccountConfig` union (after the volcengine variant):
 
@@ -52,7 +41,7 @@ In `src/shared/domain.ts`, add to the `ProviderAccountConfig` union (after the v
   | { id: string; type: "cliproxy"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined; queryProviders?: string[] | undefined }
 ```
 
-Add the `DynamicSubscription` type (after `ProviderRuntimeState`):
+Add after `ProviderRuntimeState`:
 
 ```ts
 export type DynamicSubscription = {
@@ -63,32 +52,30 @@ export type DynamicSubscription = {
 }
 ```
 
-Add `dynamicProviderIds?` to `ProfileConfig`:
+Change `ProfileConfig`:
 
 ```ts
 export type ProfileConfig = { id: string; name: string; viewKey: string | undefined; subscriptionIds: string[]; dynamicProviderIds?: string[] }
 ```
 
-- [ ] **Step 2: Add `dynamicSubscriptions?` to `ProviderRefreshResult`**
+- [ ] **Step 2: Add to ProviderRefreshResult**
 
-In `src/server/providers/types.ts`, add import and field:
+In `src/server/providers/types.ts`, add import:
 
 ```ts
 import type { DynamicSubscription } from "../../shared/domain"
 ```
 
-Add to `ProviderRefreshResult`:
+Add field to `ProviderRefreshResult`:
 
 ```ts
   dynamicSubscriptions?: DynamicSubscription[]
 ```
 
-- [ ] **Step 3: Run typecheck**
+- [ ] **Step 3: Run typecheck + commit**
 
 Run: `bun run typecheck`
-Expected: PASS (no consumers yet, just type additions)
-
-- [ ] **Step 4: Commit**
+Expected: PASS
 
 ```bash
 git add src/shared/domain.ts src/server/providers/types.ts
@@ -97,16 +84,135 @@ git commit -m "feat(types): add cliproxy ProviderAccountConfig, DynamicSubscript
 
 ---
 
-## Task 2: Storage migration + ProviderCacheRecord extension
+## Task 2: Storage migration + ProviderCacheRow extension
 
 **Files:**
 - Modify: `src/server/storage/schema.ts`
 - Modify: `src/server/storage/repositories.ts`
-- Test: `tests/storage/repositories.test.ts` (if exists) or inline verification
+- Test: `tests/storage/repositories.test.ts`
 
-- [ ] **Step 1: Add migration 6**
+**CRITICAL: Use existing `ProviderCacheRow` type + `decodeProviderCache` pattern. Do NOT use `db.prepare` or `Record<string, unknown>` casts. The codebase uses `db.query<RowType, [ParamType]>(sql).get(...)`.**
 
-In `src/server/storage/schema.ts`, append to `MIGRATIONS` array:
+- [ ] **Step 1: Write failing storage tests**
+
+Create or append to `tests/storage/repositories.test.ts`:
+
+```ts
+import { expect, test } from "bun:test"
+import { createRepositories } from "../../src/server/storage/repositories"
+import type { DashboardDatabase } from "../../src/server/storage/database"
+import type { DynamicSubscription } from "../../src/shared/domain"
+
+// Minimal in-memory DB for testing (use the real better-sqlite3 via openDashboardDatabase)
+import { openDashboardDatabase } from "../../src/server/storage/database"
+import { join } from "node:path"
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+
+function makeDb(): DashboardDatabase {
+  const dir = mkdtempSync(join(tmpdir(), "cliproxy-test-"))
+  return openDashboardDatabase(join(dir, "test.db"))
+}
+
+const dynSubs: DynamicSubscription[] = [
+  { id: "cliproxy:codex:abc123", name: "CLIProxy - Codex #1", providerMetricIds: ["codex:abc123:five_hour"], ui: { group: "CLIProxy" } },
+]
+
+test("providerCache round-trips dynamicSubscriptions", () => {
+  const db = makeDb()
+  const storage = createRepositories(db)
+  storage.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-07-17T00:00:00Z",
+    staleAfter: "2026-07-17T00:05:00Z",
+    status: "ok",
+    normalized: { metrics: [] },
+    errors: [],
+    dynamicSubscriptions: dynSubs,
+  })
+  const got = storage.providerCache.get("cp-1")
+  expect(got?.dynamicSubscriptions).toEqual(dynSubs)
+})
+
+test("providerCache preserves dynamicSubscriptions when upsert omits them (coalesce)", () => {
+  const db = makeDb()
+  const storage = createRepositories(db)
+  // First write with dynamicSubscriptions
+  storage.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-07-17T00:00:00Z",
+    staleAfter: "2026-07-17T00:05:00Z",
+    status: "ok",
+    normalized: { metrics: [] },
+    errors: [],
+    dynamicSubscriptions: dynSubs,
+  })
+  // Second write WITHOUT dynamicSubscriptions (simulates adapter failure)
+  storage.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-07-17T00:01:00Z",
+    staleAfter: "2026-07-17T00:06:00Z",
+    status: "stale",
+    normalized: { metrics: [] },
+    errors: [{ message: "failed", retryable: true }],
+  })
+  // Should still have the old dynamicSubscriptions (coalesce)
+  const got = storage.providerCache.get("cp-1")
+  expect(got?.dynamicSubscriptions).toEqual(dynSubs)
+  expect(got?.status).toBe("stale") // other fields updated
+})
+
+test("providerCache overwrites dynamicSubscriptions with empty array on success", () => {
+  const db = makeDb()
+  const storage = createRepositories(db)
+  storage.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-07-17T00:00:00Z",
+    staleAfter: "2026-07-17T00:05:00Z",
+    status: "ok",
+    normalized: { metrics: [] },
+    errors: [],
+    dynamicSubscriptions: dynSubs,
+  })
+  // Overwrite with empty (0 accounts found -- valid success)
+  storage.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-07-17T00:01:00Z",
+    staleAfter: "2026-07-17T00:06:00Z",
+    status: "ok",
+    normalized: { metrics: [] },
+    errors: [],
+    dynamicSubscriptions: [],
+  })
+  const got = storage.providerCache.get("cp-1")
+  expect(got?.dynamicSubscriptions).toEqual([])
+})
+
+test("providerCache null dynamic_subscriptions_json decodes as undefined", () => {
+  const db = makeDb()
+  const storage = createRepositories(db)
+  storage.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-07-17T00:00:00Z",
+    staleAfter: "2026-07-17T00:05:00Z",
+    status: "ok",
+    normalized: { metrics: [] },
+    errors: [],
+    // no dynamicSubscriptions -> undefined -> null in DB
+  })
+  const got = storage.providerCache.get("cp-1")
+  expect(got?.dynamicSubscriptions).toBeUndefined()
+})
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `bun test tests/storage/repositories.test.ts`
+Expected: FAIL (column doesn't exist / field doesn't exist)
+
+- [ ] **Step 3: Add migration 6**
+
+In `src/server/storage/schema.ts`, append to `MIGRATIONS`:
 
 ```ts
   {
@@ -115,15 +221,29 @@ In `src/server/storage/schema.ts`, append to `MIGRATIONS` array:
   },
 ```
 
-- [ ] **Step 2: Add `dynamicSubscriptions?` to `ProviderCacheRecord`**
+- [ ] **Step 4: Extend ProviderCacheRow + decodeProviderCache**
 
-In `src/server/storage/repositories.ts`, add import:
+In `src/server/storage/repositories.ts`, add `dynamic_subscriptions_json` to `ProviderCacheRow`:
+
+```ts
+type ProviderCacheRow = {
+  provider_account_id: string
+  fetched_at: string
+  stale_after: string
+  status: string
+  normalized_json: string
+  error_json: string | null
+  dynamic_subscriptions_json: string | null  // NEW
+}
+```
+
+Add `DynamicSubscription` import:
 
 ```ts
 import type { DynamicSubscription } from "../../shared/domain"
 ```
 
-Add field to `ProviderCacheRecord`:
+Add `dynamicSubscriptions?` to `ProviderCacheRecord`:
 
 ```ts
 export type ProviderCacheRecord = {
@@ -137,81 +257,81 @@ export type ProviderCacheRecord = {
 }
 ```
 
-- [ ] **Step 3: Update upsert SQL to include `dynamic_subscriptions_json`**
-
-In `src/server/storage/repositories.ts`, find the `providerCache.upsert` implementation (the SQL INSERT). Update the SQL to include the new column:
+Extend `decodeProviderCache`:
 
 ```ts
-upsert(record: ProviderCacheRecord): void {
-  const sql = `insert into provider_cache(
-      provider_account_id, fetched_at, stale_after, status,
-      normalized_json, error_json, dynamic_subscriptions_json
-    ) values (?, ?, ?, ?, ?, ?, ?)
-    on conflict(provider_account_id) do update set
-      fetched_at = excluded.fetched_at,
-      stale_after = excluded.stale_after,
-      status = excluded.status,
-      normalized_json = excluded.normalized_json,
-      error_json = excluded.error_json,
-      dynamic_subscriptions_json = excluded.dynamic_subscriptions_json`
-  const dynJson = record.dynamicSubscriptions !== undefined
-    ? JSON.stringify(record.dynamicSubscriptions)
-    : null
-  db.prepare(sql).run(
-    record.providerAccountId,
-    record.fetchedAt,
-    record.staleAfter,
-    record.status,
-    JSON.stringify(record.normalized),
-    record.errors.length > 0 ? JSON.stringify(record.errors) : null,
-    dynJson,
-  )
-}
-```
-
-- [ ] **Step 4: Update decode to parse `dynamic_subscriptions_json`**
-
-Find the `providerCache.get` implementation (or `decodeProviderCache`). Add parsing:
-
-```ts
-get(providerAccountId: string): ProviderCacheRecord | undefined {
-  const row = db.prepare("select * from provider_cache where provider_account_id = ?").get(providerAccountId) as Record<string, unknown> | undefined
-  if (!row) return undefined
-  const dynJson = row["dynamic_subscriptions_json"] as string | null
+function decodeProviderCache(row: ProviderCacheRow): ProviderCacheRecord {
   const result: ProviderCacheRecord = {
-    providerAccountId: row["provider_account_id"] as string,
-    fetchedAt: row["fetched_at"] as string,
-    staleAfter: row["stale_after"] as string,
-    status: row["status"] as "ok" | "stale" | "unavailable",
-    normalized: JSON.parse(row["normalized_json"] as string),
-    errors: row["error_json"] ? JSON.parse(row["error_json"] as string) : [],
+    providerAccountId: row.provider_account_id,
+    fetchedAt: row.fetched_at,
+    staleAfter: row.stale_after,
+    status: row.status as ProviderCacheRecord["status"],
+    normalized: JSON.parse(row.normalized_json) as ProviderCacheRecord["normalized"],
+    errors: row.error_json ? (JSON.parse(row.error_json) as ProviderCacheRecord["errors"]) : [],
   }
-  if (dynJson) {
-    result.dynamicSubscriptions = JSON.parse(dynJson) as DynamicSubscription[]
+  if (row.dynamic_subscriptions_json !== null) {
+    result.dynamicSubscriptions = JSON.parse(row.dynamic_subscriptions_json) as DynamicSubscription[]
   }
   return result
 }
 ```
 
-- [ ] **Step 5: Run typecheck + tests**
+- [ ] **Step 5: Update upsert SQL with coalesce**
+
+In the `upsert` function, change the SQL to include `dynamic_subscriptions_json` with `coalesce`:
+
+```ts
+    upsert(record) {
+      const sql = [
+        "insert into provider_cache(",
+        "  provider_account_id, fetched_at, stale_after, status, normalized_json, error_json, dynamic_subscriptions_json",
+        ") values (?, ?, ?, ?, ?, ?, ?)",
+        "on conflict(provider_account_id) do update set",
+        "  fetched_at = excluded.fetched_at,",
+        "  stale_after = excluded.stale_after,",
+        "  status = excluded.status,",
+        "  normalized_json = excluded.normalized_json,",
+        "  error_json = excluded.error_json,",
+        "  dynamic_subscriptions_json = coalesce(excluded.dynamic_subscriptions_json, provider_cache.dynamic_subscriptions_json)",
+      ].join("\n")
+      db.query(sql).run(
+        record.providerAccountId,
+        record.fetchedAt,
+        record.staleAfter,
+        record.status,
+        JSON.stringify(record.normalized),
+        record.errors.length > 0 ? JSON.stringify(record.errors) : null,
+        record.dynamicSubscriptions !== undefined ? JSON.stringify(record.dynamicSubscriptions) : null,
+      )
+    },
+```
+
+- [ ] **Step 6: Run tests to verify they pass**
+
+Run: `bun test tests/storage/repositories.test.ts`
+Expected: PASS (all 4 tests)
+
+- [ ] **Step 7: Run full test suite + typecheck**
 
 Run: `bun run typecheck && bun test`
-Expected: PASS (existing tests still pass; migration runs on next DB open)
+Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/server/storage/schema.ts src/server/storage/repositories.ts
-git commit -m "feat(storage): add dynamic_subscriptions_json column + ProviderCacheRecord field"
+git add src/server/storage/schema.ts src/server/storage/repositories.ts tests/storage/repositories.test.ts
+git commit -m "feat(storage): migration 6 + dynamic_subscriptions_json with coalesce (last-good preservation)"
 ```
 
 ---
 
-## Task 3: Config loading - cliproxy branch + SSRF exemption + validation
+## Task 3: Config loading - cliproxy branch + SSRF + validation
 
 **Files:**
 - Modify: `src/server/config/load-config.ts`
 - Test: `tests/config/load-config.test.ts`
+
+**CRITICAL: The cliproxy branch must be `} else if (provider.type === "cliproxy") {` -- NOT a standalone `if`. The existing chain is `if (volcengine) ... else if (API_KEY) ... else { manual }`. A standalone `if` would let cliproxy fall through to `else { manual }`, resetting providerRuntime.**
 
 - [ ] **Step 1: Write failing tests**
 
@@ -236,9 +356,26 @@ test("cliproxy accepts localhost baseUrl (SSRF loopback exemption)", () => {
   expect(config.providerRuntime.get("cp")?.apiKey).toBe("k")
 })
 
+test("cliproxy accepts 127.0.0.1 baseUrl", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://127.0.0.1:8317", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })
+  expect(config.providerRuntime.get("cp")?.available).toBe(true)
+})
+
 test("cliproxy rejects non-loopback private IP (SSRF)", () => {
   expect(() => loadDashboardConfig({
     providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://10.0.0.1:8317", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).toThrow("private")
+})
+
+test("cliproxy rejects :: (unspecified, not loopback)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://[::]:8317", apiKey: "k" }],
     subscriptions: [],
     profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
   })).toThrow("private")
@@ -271,6 +408,14 @@ test("dynamicProviderIds references existing provider -> ok", () => {
   })
   expect(config.profiles.get("self")?.dynamicProviderIds).toEqual(["cp"])
 })
+
+test("cliproxy queryProviders validates known providers", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k", queryProviders: ["codix"] }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).toThrow("queryProviders")
+})
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -278,16 +423,17 @@ test("dynamicProviderIds references existing provider -> ok", () => {
 Run: `bun test tests/config/load-config.test.ts`
 Expected: FAIL
 
-- [ ] **Step 3: Implement cliproxy branch + SSRF exemption + validation**
+- [ ] **Step 3: Implement cliproxy branch**
 
-In `src/server/config/load-config.ts`, add helper `isLoopbackOnly`:
+In `src/server/config/load-config.ts`, add helpers:
 
 ```ts
 function isLoopbackOnly(host: string): boolean {
   const h = host.toLowerCase().replace(/^\[|]$/g, "")
   if (h === "localhost") return true
   if (/^127\./.test(h)) return true
-  if (h === "::1" || h === "::") return true
+  if (h === "::1") return true
+  // NOT :: (unspecified address -- should not be exempted)
   return false
 }
 
@@ -301,14 +447,22 @@ function validateBaseUrlSkipLoopback(baseUrl: string, path: string): void {
 }
 ```
 
-Add the cliproxy branch BEFORE the `API_KEY_PROVIDER_TYPES.has(provider.type)` check in the provider loop:
+Add the cliproxy branch as an `else if` BEFORE the `API_KEY_PROVIDER_TYPES` check:
 
 ```ts
-    if (provider.type === "cliproxy") {
+    } else if (provider.type === "cliproxy") {
       if (!provider.baseUrl || provider.baseUrl === "") {
         fail(`${providerPath}.baseUrl`, "cliproxy requires baseUrl")
       }
       validateBaseUrlSkipLoopback(provider.baseUrl, `${providerPath}.baseUrl`)
+      if (provider.queryProviders !== undefined) {
+        const knownProviders = new Set(["codex", "claude", "xai"])
+        for (const qp of provider.queryProviders) {
+          if (!knownProviders.has(qp)) {
+            fail(`${providerPath}.queryProviders`, `unknown provider "${qp}"`)
+          }
+        }
+      }
       const { apiKey, reason } = resolveBearerCredential(provider as { apiKeyEnv?: string | undefined; apiKey?: string | undefined })
       const state: ProviderRuntimeState = { available: apiKey !== undefined }
       if (apiKey !== undefined) state.apiKey = apiKey
@@ -318,7 +472,7 @@ Add the cliproxy branch BEFORE the `API_KEY_PROVIDER_TYPES.has(provider.type)` c
     } else if (API_KEY_PROVIDER_TYPES.has(provider.type)) {
 ```
 
-Add `dynamicProviderIds` validation in the profiles loop (after existing `subscriptionIds` validation):
+Add `dynamicProviderIds` validation in the profiles loop:
 
 ```ts
     for (const dynProviderId of profile.dynamicProviderIds ?? []) {
@@ -331,21 +485,14 @@ Add `dynamicProviderIds` validation in the profiles loop (after existing `subscr
     }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Run tests + typecheck + commit**
 
-Run: `bun test tests/config/load-config.test.ts`
+Run: `bun test tests/config/load-config.test.ts && bun run typecheck`
 Expected: PASS
-
-- [ ] **Step 5: Run full test suite**
-
-Run: `bun test`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
 
 ```bash
 git add src/server/config/load-config.ts tests/config/load-config.test.ts
-git commit -m "feat(config): cliproxy branch with SSRF loopback exemption + dynamicProviderIds validation"
+git commit -m "feat(config): cliproxy else-if branch + SSRF loopback exemption + queryProviders validation"
 ```
 
 ---
@@ -355,6 +502,12 @@ git commit -m "feat(config): cliproxy branch with SSRF loopback exemption + dyna
 **Files:**
 - Modify: `src/server/dashboard/project.ts`
 - Test: `tests/dashboard/project.test.ts`
+
+**CRITICAL:**
+- Import `DisplayModule` (it's used by `inferDisplayModule` but NOT currently imported in project.ts)
+- `inferDisplayModule` must honor `m.suggestedDisplayModule` first
+- Test 3 must NOT set `cache: undefined` (exactOptionalPropertyTypes rejects explicit undefined on optional fields) -- omit the key entirely
+- Summary exclusion uses a `dynamic` flag on `ProjectedMetric`, NOT `startsWith("cliproxy:")`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -398,7 +551,6 @@ test("dynamic subscription projection produces metrics with synthetic config", (
     selectedRange: "24h", providers,
     dynamicSubscriptions: dynSubs,
   })
-  // Should have 2 subscriptions: poe-api (static) + cliproxy:codex:abc123 (dynamic)
   expect(payload.subscriptions).toHaveLength(2)
   const dynSub = payload.subscriptions.find(s => s.id === "cliproxy:codex:abc123")!
   expect(dynSub.name).toBe("CLIProxy - Codex #1")
@@ -443,7 +595,6 @@ test("dynamic metrics excluded from summary groups", () => {
     selectedRange: "24h", providers,
     dynamicSubscriptions: dynSubs,
   })
-  // Summary groups should NOT contain the dynamic metric's unit/kind
   for (const g of payload.summaryGroups) {
     expect(g.id).not.toContain("cliproxy")
   }
@@ -463,13 +614,12 @@ test("dynamic subscription absent (no data) -> no metrics, graceful", () => {
     }],
   })
   const providers: ProviderAccountProjection[] = [
-    { providerAccountId: "cp-main", metrics: [], cache: undefined },
+    { providerAccountId: "cp-main", metrics: [] },
   ]
   const payload = buildDashboardPayload({
     config, profileId: "self", generatedAt: NOW,
     selectedRange: "24h", providers,
   })
-  // Only poe-api subscription, no dynamic
   expect(payload.subscriptions).toHaveLength(1)
   expect(payload.subscriptions[0]!.id).toBe("poe-api")
 })
@@ -482,10 +632,28 @@ Expected: FAIL
 
 - [ ] **Step 3: Implement dynamic subscription projection**
 
-In `src/server/dashboard/project.ts`, add `DynamicSubscription` to imports:
+In `src/server/dashboard/project.ts`, update imports (ADD `DisplayModule` and `DynamicSubscription`):
 
 ```ts
-import type { DynamicSubscription, LimitWindow, MetricConfig, MetricStatus, NormalizedConfig, RangeKey, SourceValueKind } from "../../shared/domain"
+import type {
+  DisplayModule,
+  DynamicSubscription,
+  LimitWindow,
+  MetricConfig,
+  MetricStatus,
+  NormalizedConfig,
+  RangeKey,
+  SourceValueKind,
+} from "../../shared/domain"
+```
+
+Add `dynamic?: boolean` to `ProjectedMetric`:
+
+```ts
+export type ProjectedMetric = {
+  // ... existing fields ...
+  dynamic?: boolean
+}
 ```
 
 Add `dynamicProviderIds` and `dynamicSubscriptions` to `ProjectProviderMetricsInput`:
@@ -554,13 +722,14 @@ In `projectProviderMetrics`, after the existing `for (const subscriptionId of in
           normalizedUsageFilter: "",
           projectedHistory: [],
           snapshots: input.snapshots?.get(metricKey) ?? [],
+          dynamic: true,
         })
       }
     }
   }
 ```
 
-Add helper functions:
+Add helpers:
 
 ```ts
 function synthesizeMetricConfig(m: NormalizedMetric, providerMetricId: string): MetricConfig {
@@ -578,6 +747,7 @@ function synthesizeMetricConfig(m: NormalizedMetric, providerMetricId: string): 
 }
 
 function inferDisplayModule(m: NormalizedMetric): DisplayModule {
+  if (m.suggestedDisplayModule !== undefined) return m.suggestedDisplayModule
   if (m.sourceValueKind === "status") return "manual-status-card"
   if (m.window?.kind === "rolling") return "rolling-window-card"
   if (m.window?.kind === "calendar" || m.window?.kind === "fixed") return "period-quota-card"
@@ -585,9 +755,11 @@ function inferDisplayModule(m: NormalizedMetric): DisplayModule {
 }
 ```
 
-In `buildDashboardPayload`, pass dynamic data to `projectProviderMetrics`:
+In `buildDashboardPayload`, pass dynamic data:
 
 ```ts
+  const profile = input.config.profiles.get(input.profileId)
+  // ...
   const projected = projectProviderMetrics({
     config: input.config,
     subscriptionIds: profile.subscriptionIds,
@@ -600,28 +772,24 @@ In `buildDashboardPayload`, pass dynamic data to `projectProviderMetrics`:
   })
 ```
 
-Exclude dynamic metrics from `buildSummaryGroups`. In `buildSummaryGroups` (or the function that calls it), filter out metrics where `subscriptionId` starts with `"cliproxy:"`:
+In `buildDashboardPayload`, exclude dynamic metrics from summary:
 
 ```ts
-  const summaryInput = projected.filter(p => !p.subscriptionId.startsWith("cliproxy:"))
-  const summaryGroups = buildSummaryGroups(summaryInput, selectedRange, input.generatedAt)
+  const summaryGroups = buildSummaryGroups(
+    projected.filter(p => !p.dynamic),
+    selectedRange,
+    input.generatedAt,
+  )
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Run tests + typecheck + commit**
 
-Run: `bun test tests/dashboard/project.test.ts`
+Run: `bun test tests/dashboard/project.test.ts && bun run typecheck`
 Expected: PASS
-
-- [ ] **Step 5: Run full test suite**
-
-Run: `bun test`
-Expected: PASS
-
-- [ ] **Step 6: Commit**
 
 ```bash
 git add src/server/dashboard/project.ts tests/dashboard/project.test.ts
-git commit -m "feat(projection): dynamic subscription branch + synthesizeMetricConfig + summary exclusion"
+git commit -m "feat(projection): dynamic subscription branch + synthesizeMetricConfig + dynamic flag for summary"
 ```
 
 ---
@@ -632,43 +800,44 @@ git commit -m "feat(projection): dynamic subscription branch + synthesizeMetricC
 - Modify: `src/server/refresh/refresh-service.ts`
 - Test: `tests/refresh/refresh-service.test.ts`
 
-- [ ] **Step 1: Write failing test for collectVisibleProviderAccounts union**
+**CRITICAL: Read `tests/refresh/refresh-service.test.ts` first to learn the test harness pattern (likely `loadDashboardConfig` + `spyStorage` + `createRefreshService`). Write REAL tests, not placeholders.**
 
-Append to `tests/refresh/refresh-service.test.ts`:
+- [ ] **Step 1: Write failing test**
+
+Read the existing test file first:
+Run: `head -60 tests/refresh/refresh-service.test.ts`
+
+Then write a test matching the existing harness. The key assertion: a cliproxy provider in `dynamicProviderIds` gets refreshed (adapter is called).
 
 ```ts
 test("collectVisibleProviderAccounts includes dynamic providers", async () => {
-  const { service } = setupService({
-    config: {
-      providers: new Map([
-        ["poe-main", { id: "poe-main", type: "poe", apiKey: "k" }],
-        ["cp-main", { id: "cp-main", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" }],
-      ]),
-      providerRuntime: new Map([
-        ["poe-main", { available: true, apiKey: "k" }],
-        ["cp-main", { available: true, apiKey: "k" }],
-      ]),
-      subscriptions: new Map([["poe-api", { id: "poe-api", name: "Poe", providerId: "poe-main", metrics: [] }]]),
-      profiles: new Map([["self", { id: "self", name: "P", viewKey: "k", subscriptionIds: ["poe-api"], dynamicProviderIds: ["cp-main"] }]]),
-    },
-  })
-  // Refresh should attempt to refresh BOTH poe-main AND cp-main
-  const refreshCalls: string[] = []
-  // ... mock provider that records calls ...
-  // Assert cp-main is in the refresh set
+  // Use the SAME harness pattern as existing tests in this file.
+  // Create config with a cliproxy provider + dynamicProviderIds.
+  // Create a fake adapter that records when refresh() is called.
+  // Call refreshProfile.
+  // Assert the fake adapter was called for BOTH the static provider AND cliproxy.
 })
 ```
 
-Note: the exact test setup depends on the existing test harness. Adapt to match the pattern in `tests/refresh/refresh-service.test.ts`.
+Also write tests for:
+- Dynamic snapshots written after refresh
+- `buildPayloadFromStorage` loads dynamic snapshots
+- `dynamicSubscriptions` preserved on adapter failure (last-good via coalesce)
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run tests to verify they fail**
 
 Run: `bun test tests/refresh/refresh-service.test.ts`
 Expected: FAIL
 
-- [ ] **Step 3: Update `collectVisibleProviderAccounts`**
+- [ ] **Step 3: Update collectVisibleProviderAccounts**
 
-In `src/server/refresh/refresh-service.ts`, modify `collectVisibleProviderAccounts`:
+In `src/server/refresh/refresh-service.ts`, add `DynamicSubscription` import:
+
+```ts
+import type { DynamicSubscription } from "../../shared/domain"
+```
+
+Modify `collectVisibleProviderAccounts`:
 
 ```ts
   function collectVisibleProviderAccounts(profileId: string): string[] {
@@ -686,9 +855,9 @@ In `src/server/refresh/refresh-service.ts`, modify `collectVisibleProviderAccoun
   }
 ```
 
-- [ ] **Step 4: Update `writeProviderResult` to write dynamic snapshots**
+- [ ] **Step 4: Update writeProviderResult for dynamic snapshots + dynamicSubscriptions on cacheRecord**
 
-In `writeProviderResult`, after the existing `for (const { subscriptionId, metric } of subMetrics)` loop (line ~245), add:
+In `writeProviderResult`, after the existing `for (const { subscriptionId, metric } of subMetrics)` loop (after line ~245), add:
 
 ```ts
     // Dynamic subscription snapshots
@@ -697,7 +866,6 @@ In `writeProviderResult`, after the existing `for (const { subscriptionId, metri
         for (const providerMetricId of dynSub.providerMetricIds) {
           const matched = result.metrics.find((m) => m.providerMetricId === providerMetricId)
           if (!matched) continue
-          if (matched.used === undefined && matched.remaining === undefined && matched.sourceValueKind !== "status") continue
           const metricKey = buildMetricKey(paId, dynSub.id, providerMetricId)
           const snap: SnapshotInsert = {
             providerAccountId: paId,
@@ -718,9 +886,7 @@ In `writeProviderResult`, after the existing `for (const { subscriptionId, metri
     }
 ```
 
-- [ ] **Step 5: Update `writeProviderResult` cache record to include dynamicSubscriptions**
-
-In `writeProviderResult`, modify the `cacheRecord` construction:
+Update `cacheRecord` construction (around line ~248):
 
 ```ts
     const cacheRecord: ProviderCacheRecord = {
@@ -734,12 +900,14 @@ In `writeProviderResult`, modify the `cacheRecord` construction:
     }
 ```
 
-- [ ] **Step 6: Update `buildPayloadFromStorage` to load dynamic snapshots/history + pass dynamicSubscriptions**
+**The coalesce in the upsert SQL (Task 2) handles the failure case**: when `result.dynamicSubscriptions` is undefined, `cacheRecord.dynamicSubscriptions` is omitted, `upsert` writes `null`, and `coalesce` preserves the old value.
 
-In `buildPayloadFromStorage`, after the existing `for (const subId of profile.subscriptionIds)` loop (line ~397), add:
+- [ ] **Step 5: Update buildPayloadFromStorage for dynamic loading**
+
+In `buildPayloadFromStorage`, after the existing `for (const subId of profile.subscriptionIds)` loop (after line ~397), add:
 
 ```ts
-    // Load snapshots/history for dynamic subscriptions
+    // Load snapshots for dynamic subscriptions (history not needed -- adapter produces none)
     const dynamicSubscriptions = new Map<string, DynamicSubscription[]>()
     for (const dynProviderId of profile.dynamicProviderIds ?? []) {
       const cache = storage.providerCache.get(dynProviderId)
@@ -750,10 +918,6 @@ In `buildPayloadFromStorage`, after the existing `for (const subId of profile.su
       for (const dynSub of dynSubs) {
         for (const providerMetricId of dynSub.providerMetricIds) {
           const metricKey = buildMetricKey(dynProviderId, dynSub.id, providerMetricId)
-          const histRows = storage.historyEvents.listForMetric(metricKey, rangeStart, rangeEnd)
-          if (histRows.length > 0) {
-            storedHistory.set(metricKey, histRows.map((r) => ({ sourceTimestamp: r.sourceTimestamp, value: r.value, valueKind: r.valueKind })))
-          }
           const snapRows = storage.snapshots.listForMetric(metricKey, rangeStart, rangeEnd)
           if (snapRows.length > 0) {
             snapshots.set(metricKey, snapRows.map((s) => {
@@ -770,13 +934,7 @@ In `buildPayloadFromStorage`, after the existing `for (const subId of profile.su
     }
 ```
 
-Add `DynamicSubscription` to the imports at the top of `refresh-service.ts`:
-
-```ts
-import type { DynamicSubscription } from "../../shared/domain"
-```
-
-Update the `buildDashboardPayload` call at the end of `buildPayloadFromStorage`:
+Update the `buildDashboardPayload` call:
 
 ```ts
     return buildDashboardPayload({
@@ -791,16 +949,14 @@ Update the `buildDashboardPayload` call at the end of `buildPayloadFromStorage`:
     })
 ```
 
-- [ ] **Step 7: Run typecheck + tests**
+- [ ] **Step 6: Run typecheck + tests + commit**
 
 Run: `bun run typecheck && bun test`
 Expected: PASS
 
-- [ ] **Step 8: Commit**
-
 ```bash
 git add src/server/refresh/refresh-service.ts tests/refresh/refresh-service.test.ts
-git commit -m "feat(refresh): union dynamicProviderIds, write dynamic snapshots, load from storage"
+git commit -m "feat(refresh): union dynamicProviderIds + dynamic snapshot write/read + coalesce preservation"
 ```
 
 ---
@@ -810,6 +966,17 @@ git commit -m "feat(refresh): union dynamicProviderIds, write dynamic snapshots,
 **Files:**
 - Create: `src/server/providers/cliproxy.ts`
 - Test: `tests/providers/cliproxy.test.ts`
+
+**Key implementation requirements:**
+- Codex `reset_at` is Unix epoch seconds -> `new Date(reset_at * 1000).toISOString()`
+- Codex window classified by `limit_window_seconds` (NOT hardcoded primary/secondary)
+- Claude `utilization` is 0-100, used directly
+- Grok: two endpoints (weekly `?format=credits` + monthly bare), 5 required headers, merge results
+- xai monthly: `used / monthly_limit * 100` (NO Math.min cap)
+- `inferDisplayModule` honors `suggestedDisplayModule` first
+- Concurrency cap 6, per-call AbortController 70s, overall deadline 120s, fast-fail on all-401
+- Failed accounts: error metric + push to `result.errors[]` for badge escalation
+- api-call 502: check management HTTP status before parsing body
 
 - [ ] **Step 1: Write failing tests**
 
@@ -827,7 +994,6 @@ const provider: ProviderAccountConfig = {
   id: "cp-1", type: "cliproxy",
   baseUrl: "http://localhost:8317", apiKey: "mgmt-key",
 }
-const metrics: MetricConfig[] = []
 const NOW = "2026-07-17T00:00:00Z"
 
 function buildInput(overrides: Partial<ProviderRefreshInput> = {}): ProviderRefreshInput {
@@ -836,7 +1002,7 @@ function buildInput(overrides: Partial<ProviderRefreshInput> = {}): ProviderRefr
     provider,
     runtime: { available: true, apiKey: "mgmt-key" },
     now: NOW,
-    metrics,
+    metrics: [],
     ...overrides,
   }
 }
@@ -847,136 +1013,239 @@ function makeResp(status: number, body: unknown): Response {
 
 const AUTH_FILES_BODY = {
   files: [
-    {
-      auth_index: "abc123",
-      provider: "codex",
-      label: "alice@example.com",
-      disabled: false,
-      status: "active",
-      id_token: { chatgpt_account_id: "acc_123", plan_type: "pro" },
-    },
-    {
-      auth_index: "def456",
-      provider: "claude",
-      label: "claude@example.com",
-      disabled: false,
-      status: "active",
-    },
-    {
-      auth_index: "ghi789",
-      provider: "xai",
-      label: "grok@example.com",
-      disabled: false,
-      status: "active",
-    },
-    {
-      auth_index: "skip1",
-      provider: "codex",
-      disabled: true,
-      status: "disabled",
-    },
+    { auth_index: "abc123", provider: "codex", label: "alice@example.com", disabled: false, status: "active",
+      id_token: { chatgpt_account_id: "acc_123", plan_type: "pro" } },
+    { auth_index: "def456", provider: "claude", label: "claude@example.com", disabled: false, status: "active" },
+    { auth_index: "ghi789", provider: "xai", label: "grok@example.com", disabled: false, status: "active" },
+    { auth_index: "skip1", provider: "codex", disabled: true, status: "disabled" },
   ],
 }
 
-test("discovers accounts from auth-files and filters by provider type", async () => {
-  const urls: string[] = []
-  const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+function makeCodexBody(): unknown {
+  return {
+    status_code: 200,
+    body: JSON.stringify({
+      rate_limit: {
+        primary_window: { used_percent: 72, limit_window_seconds: 18000, reset_at: 1783275600 },
+        secondary_window: { used_percent: 45, limit_window_seconds: 604800, reset_at: 1783880400 },
+      },
+    }),
+  }
+}
+
+function makeClaudeBody(): unknown {
+  return {
+    status_code: 200,
+    body: JSON.stringify({
+      five_hour: { utilization: 65, resets_at: "2026-07-17T05:00:00Z" },
+      seven_day: { utilization: 40, resets_at: "2026-07-24T00:00:00Z" },
+    }),
+  }
+}
+
+function makeXaiBody(): unknown {
+  return {
+    status_code: 200,
+    body: JSON.stringify({
+      config: {
+        credit_usage_percent: 30,
+        monthly_limit: { val: 1000 },
+        used: { val: 200 },
+        on_demand_cap: { val: 500 },
+        on_demand_used: { val: 100 },
+        current_period: { type: "weekly", end: "2026-07-24T00:00:00Z" },
+        billing_period_end: "2026-08-01T00:00:00Z",
+      },
+    }),
+  }
+}
+
+function makeFakeFetch(codexBody = makeCodexBody(), claudeBody = makeClaudeBody(), xaiBody = makeXaiBody()) {
+  const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input)
-    urls.push(url)
     if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
     if (url.includes("/api-call")) {
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {}
-      if (body.auth_index === "abc123") {
-        return makeResp(200, {
-          status_code: 200,
-          body: JSON.stringify({
-            rate_limit: {
-              primary_window: { used_percent: 72, limit_window_seconds: 18000, reset_at: 1752735600 },
-              secondary_window: { used_percent: 45, limit_window_seconds: 604800, reset_at: 1753254000 },
-            },
-          }),
-        })
-      }
-      if (body.auth_index === "def456") {
-        return makeResp(200, {
-          status_code: 200,
-          body: JSON.stringify({
-            five_hour: { utilization: 65, resets_at: "2026-07-17T05:00:00Z" },
-            seven_day: { utilization: 40, resets_at: "2026-07-24T00:00:00Z" },
-          }),
-        })
-      }
-      if (body.auth_index === "ghi789") {
-        return makeResp(200, {
-          status_code: 200,
-          body: JSON.stringify({
-            config: {
-              credit_usage_percent: 30,
-              monthly_limit: { val: 1000 },
-              used: { val: 200 },
-              on_demand_cap: { val: 500 },
-              on_demand_used: { val: 100 },
-              current_period: { type: "weekly", end: "2026-07-24T00:00:00Z" },
-              billing_period_end: "2026-08-01T00:00:00Z",
-            },
-          }),
-        })
-      }
+      if (body.auth_index === "abc123") return makeResp(200, codexBody)
+      if (body.auth_index === "def456") return makeResp(200, claudeBody)
+      if (body.auth_index === "ghi789") return makeResp(200, xaiBody)
       return makeResp(200, { status_code: 500, body: "{}" })
     }
     return makeResp(404, {})
   }
-  const result = await createCliproxyProvider(fakeFetch as unknown as FakeFetch).refresh(buildInput())
+  return raw as unknown as FakeFetch
+}
 
-  expect(urls.some(u => u.includes("/auth-files"))).toBe(true)
+test("discovers accounts, filters by provider, skips disabled", async () => {
+  const fetchImpl = makeFakeFetch()
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
   expect(result.dynamicSubscriptions).toBeDefined()
-  expect(result.dynamicSubscriptions!.length).toBe(3) // codex, claude, xai (skip1 filtered)
+  expect(result.dynamicSubscriptions!.length).toBe(3) // skip1 filtered
+})
 
-  // Codex
-  const codexSub = result.dynamicSubscriptions!.find(s => s.id.includes("codex"))!
-  expect(codexSub.name).toContain("alice")
+test("codex: reset_at converted from Unix seconds to ISO", async () => {
+  const fetchImpl = makeFakeFetch()
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
   const codex5h = result.metrics.find(m => m.providerMetricId === "codex:abc123:five_hour")!
   expect(codex5h.used).toBe(72)
   expect(codex5h.limit).toBe(100)
-  expect(codex5h.window?.resetAt).toBe("2025-07-17T05:00:00.000Z") // 1752735600 * 1000
+  // 1783275600 seconds -> 2026-07-04T07:00:00.000Z
+  expect(codex5h.window?.resetAt).toBe("2026-07-04T07:00:00.000Z")
+})
 
-  // Claude (utilization used directly, NOT x100)
+test("codex: window classified by limit_window_seconds", async () => {
+  // Free plan with 30-day secondary window
+  const freeBody = {
+    status_code: 200,
+    body: JSON.stringify({
+      rate_limit: {
+        primary_window: { used_percent: 80, limit_window_seconds: 18000, reset_at: 1783275600 },
+        secondary_window: { used_percent: 30, limit_window_seconds: 2592000, reset_at: 1785850800 },
+      },
+    }),
+  }
+  const fetchImpl = makeFakeFetch(freeBody)
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
+  // primary -> five_hour (18000), secondary -> monthly (2592000), NOT weekly
+  const fiveHour = result.metrics.find(m => m.providerMetricId === "codex:abc123:five_hour")!
+  expect(fiveHour.window?.duration).toBe("5h")
+  const monthly = result.metrics.find(m => m.providerMetricId === "codex:abc123:monthly")!
+  expect(monthly).toBeDefined()
+  expect(monthly.window?.duration).toBe("30d")
+})
+
+test("claude: utilization used directly (NOT x100)", async () => {
+  const fetchImpl = makeFakeFetch()
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
   const claude5h = result.metrics.find(m => m.providerMetricId === "claude:def456:five_hour")!
-  expect(claude5h.used).toBe(65)
+  expect(claude5h.used).toBe(65) // NOT 6500
+  expect(claude5h.limit).toBe(100)
+})
 
-  // Grok
-  const grokWeekly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:weekly")!
-  expect(grokWeekly.used).toBe(30)
-  const grokMonthly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:monthly")!
-  expect(grokMonthly.used).toBe(20) // 200/1000*100
+test("xai: two endpoints merged, monthly percent not capped", async () => {
+  // overage: used=1500, monthly_limit=1000 -> 150%
+  const xaiOverage = {
+    status_code: 200,
+    body: JSON.stringify({
+      config: {
+        credit_usage_percent: 80,
+        monthly_limit: { val: 1000 },
+        used: { val: 1500 },
+        on_demand_cap: { val: 500 },
+        on_demand_used: { val: 200 },
+        current_period: { type: "weekly", end: "2026-07-24T00:00:00Z" },
+        billing_period_end: "2026-08-01T00:00:00Z",
+      },
+    }),
+  }
+  const fetchImpl = makeFakeFetch(makeCodexBody(), makeClaudeBody(), xaiOverage)
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
+  const monthly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:monthly")!
+  expect(monthly.used).toBe(150) // 1500/1000*100, NOT capped at 100
+})
+
+test("xai: weekly and on_demand metrics produced", async () => {
+  const fetchImpl = makeFakeFetch()
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
+  const weekly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:weekly")!
+  expect(weekly.used).toBe(30)
+  const onDemand = result.metrics.find(m => m.providerMetricId === "xai:ghi789:on_demand")!
+  expect(onDemand.used).toBe(20) // 100/500*100
+})
+
+test("xai: required headers sent", async () => {
+  const calls: Record<string, Record<string, string>> = {}
+  const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
+    if (url.includes("/api-call")) {
+      const body = JSON.parse(init?.body as string)
+      if (body.auth_index === "ghi789") {
+        calls.xai = body.header
+        // Return both weekly and monthly with same body
+        return makeResp(200, makeXaiBody())
+      }
+      return makeResp(200, { status_code: 200, body: "{}" })
+    }
+    return makeResp(404, {})
+  }
+  await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(calls.xai!["x-xai-token-auth"]).toBe("xai-grok-cli")
+  expect(calls.xai!["x-grok-client-version"]).toBe("0.2.101")
+  expect(calls.xai!["User-Agent"]).toContain("grok-pager")
+})
+
+test("failed accounts produce error metric + push to errors[] for badge escalation", async () => {
+  const fetchImpl = makeFakeFetch(
+    { status_code: 401, body: "{}" }, // codex upstream 401
+    makeClaudeBody(),
+    makeXaiBody(),
+  )
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
+  // Codex account has error metric
+  const codexError = result.metrics.find(m => m.providerMetricId === "codex:abc123:error")
+  expect(codexError).toBeDefined()
+  expect(codexError!.sourceValueKind).toBe("status")
+  expect(codexError!.notes).toContain("auth")
+  // Error pushed to result.errors[] for subscription badge escalation
+  expect(result.errors).toBeDefined()
+  expect(result.errors!.length).toBeGreaterThan(0)
+})
+
+test("does not skip unavailable accounts (quota exceeded = most important)", async () => {
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("/auth-files")) {
+      return makeResp(200, {
+        files: [{
+          auth_index: "jkl012", provider: "codex",
+          disabled: false, status: "active", unavailable: true,
+          id_token: { chatgpt_account_id: "acc_456" },
+        }],
+      })
+    }
+    return makeResp(200, makeCodexBody())
+  }
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.dynamicSubscriptions!.length).toBe(1)
+  expect(result.metrics.find(m => m.providerMetricId === "codex:jkl012:five_hour")).toBeDefined()
 })
 
 test("auth-files 404 -> non-retryable 'management API not enabled'", async () => {
-  const fakeFetch = async (): Promise<Response> => makeResp(404, {})
-  const result = await createCliproxyProvider(fakeFetch as unknown as FakeFetch).refresh(buildInput())
-  expect(result.metrics).toHaveLength(0)
+  const fetchImpl = async (): Promise<Response> => makeResp(404, {})
+  const result = await createCliproxyProvider(fetchImpl as unknown as FakeFetch).refresh(buildInput())
   expect(result.errors![0]!.retryable).toBe(false)
   expect(result.errors![0]!.message).toContain("not enabled")
 })
 
 test("auth-files 401 -> non-retryable auth error", async () => {
-  const fakeFetch = async (): Promise<Response> => makeResp(401, {})
-  const result = await createCliproxyProvider(fakeFetch as unknown as FakeFetch).refresh(buildInput())
+  const fetchImpl = async (): Promise<Response> => makeResp(401, {})
+  const result = await createCliproxyProvider(fetchImpl as unknown as FakeFetch).refresh(buildInput())
   expect(result.errors![0]!.retryable).toBe(false)
   expect(result.errors![0]!.message).toContain("authentication failed")
 })
 
 test("api-call 502 -> retryable error for that account", async () => {
-  const fakeFetch = async (input: RequestInfo | URL): Promise<Response> => {
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input)
     if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
     return makeResp(502, { error: "request failed" })
   }
-  const result = await createCliproxyProvider(fakeFetch as unknown as FakeFetch).refresh(buildInput())
-  // All accounts fail with 502 -> error metrics produced, dynamicSubscriptions still present
-  expect(result.dynamicSubscriptions!.length).toBe(3)
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.dynamicSubscriptions!.length).toBe(3) // still produced
   const errorMetrics = result.metrics.filter(m => m.sourceValueKind === "status")
-  expect(errorMetrics.length).toBe(3)
+  expect(errorMetrics.length).toBe(3) // all accounts failed
+})
+
+test("api-call 400 'auth token not found' -> account error with stale auth_index note", async () => {
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
+    return makeResp(400, { error: "auth token not found" })
+  }
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  const codexError = result.metrics.find(m => m.providerMetricId === "codex:abc123:error")
+  expect(codexError!.notes).toContain("stale")
 })
 
 test("management key missing -> unavailable", async () => {
@@ -987,33 +1256,17 @@ test("management key missing -> unavailable", async () => {
   expect(result.errors![0]!.retryable).toBe(false)
 })
 
-test("does not skip unavailable accounts (quota exceeded = most important)", async () => {
-  const fakeFetch = async (input: RequestInfo | URL): Promise<Response> => {
+test("codex 429 -> classified as upstream error (not parse error)", async () => {
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input)
-    if (url.includes("/auth-files")) {
-      return makeResp(200, {
-        files: [{
-          auth_index: "jkl012",
-          provider: "codex",
-          disabled: false,
-          status: "active",
-          unavailable: true, // quota exceeded!
-          id_token: { chatgpt_account_id: "acc_456" },
-        }],
-      })
-    }
-    return makeResp(200, {
-      status_code: 200,
-      body: JSON.stringify({
-        rate_limit: {
-          primary_window: { used_percent: 100, limit_window_seconds: 18000, reset_at: 1752735600 },
-        },
-      }),
-    })
+    if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
+    const body = typeof (await new Response(input).text().catch(() => "")) === "string" ? {} : {}
+    return makeResp(200, { status_code: 429, body: '{"error":"rate limited"}' })
   }
-  const result = await createCliproxyProvider(fakeFetch as unknown as FakeFetch).refresh(buildInput())
-  expect(result.dynamicSubscriptions!.length).toBe(1) // NOT skipped
-  expect(result.metrics.find(m => m.providerMetricId === "codex:jkl012:five_hour")!.used).toBe(100)
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  const codexError = result.metrics.find(m => m.providerMetricId === "codex:abc123:error")
+  expect(codexError).toBeDefined()
+  expect(codexError!.notes).toContain("429")
 })
 ```
 
@@ -1027,28 +1280,25 @@ Expected: FAIL (module not found)
 Create `src/server/providers/cliproxy.ts`:
 
 ```ts
-import type { DynamicSubscription, MetricConfig } from "../../shared/domain"
+import type { DynamicSubscription } from "../../shared/domain"
 import type {
   NormalizedMetric, ProviderAdapter, ProviderRefreshInput, ProviderRefreshResult,
 } from "./types"
 import { authError, isRetryableStatus, parseNumber } from "./shared"
 
 // CLIProxyAPI adapter.
-// Discovers upstream accounts via GET /v0/management/auth-files, then queries
-// each account's quota via POST /v0/management/api-call with $TOKEN$ substitution.
-// Supports codex, claude, xai providers.
-//
-// Sources:
-//   cc-switch subscription.rs (Codex/Claude quota URLs + response parsing)
-//   CPAMP xai_probe.go (Grok billing URL + response parsing)
-//   CLIProxyAPI api_tools.go (api-call endpoint shape + $TOKEN$ mechanism)
+// GET /v0/management/auth-files -> discover accounts
+// POST /v0/management/api-call -> query upstream quota with $TOKEN$ substitution
+// Sources: cc-switch subscription.rs (Codex/Claude), CPAMP xai_probe.go (Grok)
 
 const DEFAULT_QUERY_PROVIDERS = ["codex", "claude", "xai"]
 const API_CALL_CONCURRENCY = 6
 const PER_CALL_TIMEOUT_MS = 70_000
+const OVERALL_DEADLINE_MS = 120_000
 
 type CliproxyProvider = {
-  id: string; type: "cliproxy"; baseUrl: string; apiKeyEnv?: string; apiKey?: string; queryProviders?: string[]
+  id: string; type: "cliproxy"; baseUrl: string
+  apiKeyEnv?: string | undefined; apiKey?: string | undefined; queryProviders?: string[] | undefined
 }
 
 type AuthFileEntry = {
@@ -1059,6 +1309,13 @@ type AuthFileEntry = {
   unavailable?: boolean
   status?: string
   id_token?: { chatgpt_account_id?: string; plan_type?: string }
+}
+
+type FilteredAccount = {
+  provider: string
+  authIndex: string
+  label?: string
+  idToken?: { chatgpt_account_id?: string; plan_type?: string }
 }
 
 export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): ProviderAdapter {
@@ -1080,6 +1337,9 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       const providerConfig = input.provider as CliproxyProvider
       const baseUrl = providerConfig.baseUrl.replace(/\/$/, "")
       const queryProviders = providerConfig.queryProviders ?? DEFAULT_QUERY_PROVIDERS
+      const deadline = Date.now() + OVERALL_DEADLINE_MS
+      const deadlineController = new AbortController()
+      const deadlineTimer = setTimeout(() => deadlineController.abort(), OVERALL_DEADLINE_MS)
 
       // 1) Discover accounts
       let authFiles: AuthFileEntry[]
@@ -1088,111 +1348,144 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       mgmtHeaders.set("Accept", "application/json")
 
       try {
-        const res = await fetchImpl(`${baseUrl}/v0/management/auth-files`, { method: "GET", headers: mgmtHeaders })
+        const res = await fetchImpl(`${baseUrl}/v0/management/auth-files`, {
+          method: "GET", headers: mgmtHeaders, signal: deadlineController.signal,
+        })
         if (res.status === 404) {
+          clearTimeout(deadlineTimer)
           return { ...base, errors: [{ message: "CLIProxyAPI management API not enabled. Set MANAGEMENT_PASSWORD or remote-management.secret-key.", retryable: false }] }
         }
         if (res.status === 401 || res.status === 403) {
+          clearTimeout(deadlineTimer)
           return { ...base, errors: [authError("CLIProxyAPI authentication failed")] }
         }
         if (!res.ok) {
+          clearTimeout(deadlineTimer)
           return { ...base, errors: [{ message: `CLIProxyAPI auth-files request failed (${res.status})`, retryable: isRetryableStatus(res.status) }] }
         }
         const body = (await res.json()) as { files?: AuthFileEntry[] }
         authFiles = Array.isArray(body.files) ? body.files : []
       } catch {
+        clearTimeout(deadlineTimer)
         return { ...base, errors: [{ message: "CLIProxyAPI auth-files network error", retryable: true }] }
       }
 
       // Filter accounts
-      const accounts = authFiles.filter((a) => {
-        if (!a.provider || !queryProviders.includes(a.provider)) return false
-        if (a.disabled === true) return false
-        if (a.status !== undefined && a.status !== "active") return false
-        if (!a.auth_index || a.auth_index === "") return false
+      const accounts: FilteredAccount[] = authFiles.flatMap((a): FilteredAccount[] => {
+        if (!a.provider || !queryProviders.includes(a.provider)) return []
+        if (a.disabled === true) return []
+        if (a.status !== undefined && a.status !== "active") return []
+        if (!a.auth_index || a.auth_index === "") return []
         // Do NOT skip unavailable (quota exceeded = most important to show)
-        return true
+        return [{
+          provider: a.provider,
+          authIndex: a.auth_index,
+          ...(a.label !== undefined ? { label: a.label } : {}),
+          ...(a.id_token !== undefined ? { idToken: a.id_token } : {}),
+        }]
       })
 
-      // 2) Fan out api-call per account (concurrency-capped)
+      // 2) Fan out api-call per account (concurrency-capped, with deadline + fast-fail)
       const metrics: NormalizedMetric[] = []
       const dynamicSubscriptions: DynamicSubscription[] = []
+      const adapterErrors: Array<{ message: string; retryable: boolean }> = []
 
-      // Process in batches of API_CALL_CONCURRENCY
       for (let i = 0; i < accounts.length; i += API_CALL_CONCURRENCY) {
+        if (Date.now() >= deadline) break
         const batch = accounts.slice(i, i + API_CALL_CONCURRENCY)
         const results = await Promise.allSettled(
-          batch.map((acct) => queryAccount(fetchImpl, baseUrl, apiKey, acct)),
+          batch.map((acct) => queryAccountWithTimeout(fetchImpl, baseUrl, apiKey, acct, deadlineController.signal)),
         )
-        for (let j = 0; j < results.length; j++) {
+
+        // Fast-fail: if entire batch returned auth errors, abort remaining
+        const batchResults = results.map(r => r.status === "fulfilled" ? r.value : { metrics: [] as NormalizedMetric[], error: "request failed" })
+        const allAuthFailed = batchResults.every(r =>
+          r.error !== undefined && (r.error.includes("auth") || r.error.includes("authentication"))
+        )
+        if (allAuthFailed && i + API_CALL_CONCURRENCY < accounts.length) {
+          adapterErrors.push({ message: "All api-call requests in batch failed authentication; aborting remaining", retryable: false })
+          break
+        }
+
+        for (let j = 0; j < batchResults.length; j++) {
           const acct = batch[j]!
-          const r = results[j]
+          const r = batchResults[j]!
           const accountMetrics: NormalizedMetric[] = []
-          if (r.status === "fulfilled") {
-            accountMetrics.push(...r.value.metrics)
-            if (r.value.error) {
-              accountMetrics.push(makeErrorMetric(acct.provider!, acct.auth_index!, r.value.error))
-            }
-          } else {
-            accountMetrics.push(makeErrorMetric(acct.provider!, acct.auth_index!, "request failed"))
+          accountMetrics.push(...r.metrics)
+          if (r.error) {
+            const errorMetric = makeErrorMetric(acct.provider, acct.authIndex, r.error)
+            accountMetrics.push(errorMetric)
+            // Push to adapter errors for subscription badge escalation
+            adapterErrors.push({ message: `${acct.provider}:${acct.authIndex}: ${r.error}`, retryable: !r.error.includes("auth") })
           }
           metrics.push(...accountMetrics)
           dynamicSubscriptions.push({
-            id: `cliproxy:${acct.provider}:${acct.auth_index}`,
-            name: acct.label ? `CLIProxy - ${acct.label}` : `CLIProxy - ${acct.provider} #${acct.auth_index.slice(0, 8)}`,
-            providerMetricIds: accountMetrics.map((m) => m.providerMetricId),
+            id: `cliproxy:${acct.provider}:${acct.authIndex}`,
+            name: acct.label ? `CLIProxy - ${acct.label}` : `CLIProxy - ${acct.provider} #${acct.authIndex.slice(0, 8)}`,
+            providerMetricIds: accountMetrics.map(m => m.providerMetricId),
             ui: { group: "CLIProxy" },
           })
         }
       }
 
-      return { ...base, metrics, dynamicSubscriptions }
+      clearTimeout(deadlineTimer)
+      return { ...base, metrics, dynamicSubscriptions, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}) }
     },
   }
 }
 
 type AccountQueryResult = { metrics: NormalizedMetric[]; error?: string }
 
-async function queryAccount(
-  fetchImpl: typeof fetch,
-  baseUrl: string,
-  mgmtKey: string,
-  acct: AuthFileEntry,
+async function queryAccountWithTimeout(
+  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, acct: FilteredAccount, parentSignal: AbortSignal,
 ): Promise<AccountQueryResult> {
-  const provider = acct.provider!
-  const authIndex = acct.auth_index!
-
-  if (provider === "codex") {
-    return queryCodex(fetchImpl, baseUrl, mgmtKey, authIndex, acct.id_token?.chatgpt_account_id)
-  } else if (provider === "claude") {
-    return queryClaude(fetchImpl, baseUrl, mgmtKey, authIndex)
-  } else if (provider === "xai") {
-    return queryXai(fetchImpl, baseUrl, mgmtKey, authIndex)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), PER_CALL_TIMEOUT_MS)
+  // Link to parent deadline
+  parentSignal.addEventListener("abort", () => controller.abort(), { once: true })
+  try {
+    return await queryAccount(fetchImpl, baseUrl, mgmtKey, acct, controller.signal)
+  } finally {
+    clearTimeout(timer)
   }
-  return { metrics: [], error: `unknown provider: ${provider}` }
+}
+
+async function queryAccount(
+  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, acct: FilteredAccount, signal: AbortSignal,
+): Promise<AccountQueryResult> {
+  if (acct.provider === "codex") {
+    return queryCodex(fetchImpl, baseUrl, mgmtKey, acct.authIndex, acct.idToken?.chatgpt_account_id, signal)
+  } else if (acct.provider === "claude") {
+    return queryClaude(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal)
+  } else if (acct.provider === "xai") {
+    return queryXai(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal)
+  }
+  return { metrics: [], error: `unknown provider: ${acct.provider}` }
 }
 
 async function apiCall(
-  fetchImpl: typeof fetch,
-  baseUrl: string,
-  mgmtKey: string,
-  authIndex: string,
-  method: string,
-  url: string,
-  headers: Record<string, string>,
+  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string,
+  authIndex: string, method: string, url: string, headers: Record<string, string>,
+  signal: AbortSignal,
 ): Promise<{ ok: true; statusCode: number; body: string } | { ok: false; error: string; retryable: boolean }> {
-  const res = await fetchImpl(`${baseUrl}/v0/management/api-call`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${mgmtKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ auth_index: authIndex, method, url, header: headers }),
-  })
+  let res: Response
+  try {
+    res = await fetchImpl(`${baseUrl}/v0/management/api-call`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${mgmtKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ auth_index: authIndex, method, url, header: headers }),
+      signal,
+    })
+  } catch {
+    return { ok: false, error: "network error", retryable: true }
+  }
   // Management API HTTP status determines error type
   if (res.status === 502) {
     return { ok: false, error: "api-call transport failure", retryable: true }
   }
   if (res.status === 400) {
     const body = await res.json().catch(() => ({})) as { error?: string }
-    return { ok: false, error: body.error ?? "api-call bad request", retryable: false }
+    return { ok: false, error: body.error ?? "api-call bad request (stale auth_index?)", retryable: false }
   }
   if (!res.ok) {
     return { ok: false, error: `api-call failed (${res.status})`, retryable: isRetryableStatus(res.status) }
@@ -1205,55 +1498,67 @@ async function apiCall(
 }
 
 async function queryCodex(
-  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string, accountId?: string,
+  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string, accountId: string | undefined, signal: AbortSignal,
 ): Promise<AccountQueryResult> {
   const headers: Record<string, string> = {
     "Authorization": "Bearer $TOKEN$",
     "User-Agent": "codex-cli",
     "Accept": "application/json",
   }
-  if (accountId) headers["ChatGPT-Account-Id"] = accountId
+  if (accountId !== undefined) headers["ChatGPT-Account-Id"] = accountId
 
   const result = await apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
-    "https://chatgpt.com/backend-api/wham/usage", headers)
+    "https://chatgpt.com/backend-api/wham/usage", headers, signal)
   if (!result.ok) return { metrics: [], error: result.error }
 
   if (result.statusCode === 401 || result.statusCode === 403) {
     return { metrics: [], error: "upstream auth failed (possible stale auth_index)" }
   }
+  if (result.statusCode === 429) {
+    return { metrics: [], error: "upstream rate limited (429)" }
+  }
   if (result.statusCode >= 500) {
+    return { metrics: [], error: `upstream error (${result.statusCode})` }
+  }
+  if (result.statusCode < 200 || result.statusCode >= 300) {
     return { metrics: [], error: `upstream error (${result.statusCode})` }
   }
 
   try {
     const parsed = JSON.parse(result.body) as {
-      rate_limit?: {
-        primary_window?: { used_percent?: number; limit_window_seconds?: number; reset_at?: number }
-        secondary_window?: { used_percent?: number; limit_window_seconds?: number; reset_at?: number }
-      }
+      rate_limit?: Record<string, { used_percent?: unknown; limit_window_seconds?: unknown; reset_at?: unknown } | undefined>
     }
-    const windows: Array<{ data: { used_percent?: number; limit_window_seconds?: number; reset_at?: number }; name: string; duration: string }> = []
-    const rl = parsed.rate_limit
-    if (rl?.primary_window) windows.push({ data: rl.primary_window, name: "five_hour", duration: "5h" })
-    if (rl?.secondary_window) windows.push({ data: rl.secondary_window, name: "weekly", duration: "7d" })
-
     const metrics: NormalizedMetric[] = []
-    for (const w of windows) {
-      const used = parseNumber(w.data.used_percent)
-      const limitWindowSeconds = parseNumber(w.data.limit_window_seconds)
-      if (used === undefined) continue
-      const resetAt = typeof w.data.reset_at === "number" ? new Date(w.data.reset_at * 1000).toISOString() : undefined
-      const metric: NormalizedMetric = {
-        providerMetricId: `codex:${authIndex}:${w.name}`,
-        label: w.name === "five_hour" ? "5h" : "Weekly",
+    const rl = parsed.rate_limit ?? {}
+    for (const window of Object.values(rl)) {
+      if (!window) continue
+      const used = parseNumber(window.used_percent)
+      const limitWindowSeconds = parseNumber(window.limit_window_seconds)
+      if (used === undefined || limitWindowSeconds === undefined) continue
+
+      // Classify by limit_window_seconds (NOT hardcoded primary/secondary)
+      let name: string
+      let duration: string
+      if (limitWindowSeconds === 18000) { name = "five_hour"; duration = "5h" }
+      else if (limitWindowSeconds === 604800) { name = "weekly"; duration = "7d" }
+      else if (limitWindowSeconds === 2592000) { name = "monthly"; duration = "30d" }
+      else continue // unknown window size -> skip
+
+      // reset_at is Unix epoch seconds (NOT ISO string)
+      const resetAt = typeof window.reset_at === "number"
+        ? new Date(window.reset_at * 1000).toISOString()
+        : undefined
+
+      metrics.push({
+        providerMetricId: `codex:${authIndex}:${name}`,
+        label: name === "five_hour" ? "5h" : name === "weekly" ? "Weekly" : "Monthly",
         unit: "%",
         used,
         limit: 100,
         sourceValueKind: "gauge-used",
         sourceConfidence: "known",
-        ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration: w.duration, resetAt } } : {}),
-      }
-      metrics.push(metric)
+        ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration, resetAt } } : {}),
+      })
     }
     return { metrics }
   } catch {
@@ -1262,7 +1567,7 @@ async function queryCodex(
 }
 
 async function queryClaude(
-  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string,
+  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string, signal: AbortSignal,
 ): Promise<AccountQueryResult> {
   const headers: Record<string, string> = {
     "Authorization": "Bearer $TOKEN$",
@@ -1271,13 +1576,19 @@ async function queryClaude(
   }
 
   const result = await apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
-    "https://api.anthropic.com/api/oauth/usage", headers)
+    "https://api.anthropic.com/api/oauth/usage", headers, signal)
   if (!result.ok) return { metrics: [], error: result.error }
 
   if (result.statusCode === 401 || result.statusCode === 403) {
     return { metrics: [], error: "upstream auth failed (possible stale auth_index)" }
   }
+  if (result.statusCode === 429) {
+    return { metrics: [], error: "upstream rate limited (429)" }
+  }
   if (result.statusCode >= 500) {
+    return { metrics: [], error: `upstream error (${result.statusCode})` }
+  }
+  if (result.statusCode < 200 || result.statusCode >= 300) {
     return { metrics: [], error: `upstream error (${result.statusCode})` }
   }
 
@@ -1290,10 +1601,10 @@ async function queryClaude(
       const win = value as { utilization?: unknown; resets_at?: unknown }
       const used = parseNumber(win.utilization)
       if (used === undefined) continue
-      // utilization is 0-100, do NOT multiply
+      // utilization is 0-100, used directly (do NOT multiply by 100)
       const resetAt = typeof win.resets_at === "string" ? win.resets_at : undefined
       const duration = key.startsWith("five_hour") ? "5h" : "7d"
-      const metric: NormalizedMetric = {
+      metrics.push({
         providerMetricId: `claude:${authIndex}:${key}`,
         label: key.replace(/_/g, " "),
         unit: "%",
@@ -1302,8 +1613,7 @@ async function queryClaude(
         sourceValueKind: "gauge-used",
         sourceConfidence: "known",
         ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration, resetAt } } : {}),
-      }
-      metrics.push(metric)
+      })
     }
     return { metrics }
   } catch {
@@ -1312,7 +1622,7 @@ async function queryClaude(
 }
 
 async function queryXai(
-  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string,
+  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string, signal: AbortSignal,
 ): Promise<AccountQueryResult> {
   const headers: Record<string, string> = {
     "Authorization": "Bearer $TOKEN$",
@@ -1325,9 +1635,9 @@ async function queryXai(
   // Query both weekly and monthly endpoints, merge results
   const [weeklyResult, monthlyResult] = await Promise.all([
     apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
-      "https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers),
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers, signal),
     apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
-      "https://cli-chat-proxy.grok.com/v1/billing", headers),
+      "https://cli-chat-proxy.grok.com/v1/billing", headers, signal),
   ])
 
   const metrics: NormalizedMetric[] = []
@@ -1338,22 +1648,25 @@ async function queryXai(
     try {
       const parsed = JSON.parse(weeklyResult.body) as { config?: Record<string, unknown> }
       weeklyConfig = parsed.config
-    } catch { /* parse error handled below */ }
+    } catch { /* handled below */ }
   }
   if (monthlyResult.ok && monthlyResult.statusCode >= 200 && monthlyResult.statusCode < 300) {
     try {
       const parsed = JSON.parse(monthlyResult.body) as { config?: Record<string, unknown> }
       monthlyConfig = parsed.config
-    } catch { /* parse error handled below */ }
+    } catch { /* handled below */ }
   }
 
+  // Weekly data from weekly endpoint
   const config = weeklyConfig ?? monthlyConfig
   if (!config) {
-    const err = !weeklyResult.ok ? weeklyResult.error : !monthlyResult.ok ? monthlyResult.error : "no billing data"
+    const err = !weeklyResult.ok ? weeklyResult.error
+      : !monthlyResult.ok ? monthlyResult.error
+      : "no billing data"
     return { metrics: [], error: err }
   }
 
-  // Weekly
+  // Weekly: credit_usage_percent
   const weeklyUsed = parseNumber(config["credit_usage_percent"])
   if (weeklyUsed !== undefined) {
     const period = config["current_period"] as Record<string, unknown> | undefined
@@ -1370,17 +1683,17 @@ async function queryXai(
     })
   }
 
-  // Monthly (merge from monthlyConfig if available, fallback to weekly config)
-  const cfg = monthlyConfig ?? config
-  const monthlyLimit = readXaiCents(cfg, "monthly_limit", "monthlyLimit")
-  const used = readXaiCents(cfg, "used")
-  const onDemandCap = readXaiCents(cfg, "on_demand_cap", "onDemandCap")
-  const onDemandUsed = readXaiCents(cfg, "on_demand_used", "onDemandUsed")
-  const billingPeriodEnd = typeof cfg["billing_period_end"] === "string" ? cfg["billing_period_end"] as string : undefined
+  // Monthly: merge from monthlyConfig if available, fallback to weekly config
+  const monthlyCfg = monthlyConfig ?? config
+  const monthlyLimit = readXaiCents(monthlyCfg, "monthly_limit", "monthlyLimit")
+  const used = readXaiCents(monthlyCfg, "used")
+  const onDemandCap = readXaiCents(monthlyCfg, "on_demand_cap", "onDemandCap")
+  const onDemandUsed = readXaiCents(monthlyCfg, "on_demand_used", "onDemandUsed")
+  const billingPeriodEnd = typeof monthlyCfg["billing_period_end"] === "string" ? monthlyCfg["billing_period_end"] as string : undefined
 
   if (monthlyLimit !== undefined && monthlyLimit > 0 && used !== undefined) {
-    const includedUsed = Math.min(used, monthlyLimit)
-    const monthlyUsedPercent = (includedUsed / monthlyLimit) * 100
+    // NO Math.min cap -- overage >100% is meaningful
+    const monthlyUsedPercent = (used / monthlyLimit) * 100
     metrics.push({
       providerMetricId: `xai:${authIndex}:monthly`,
       label: "Monthly",
@@ -1428,7 +1741,7 @@ function readXaiCents(obj: Record<string, unknown>, ...keys: string[]): number |
 function makeErrorMetric(provider: string, authIndex: string, error: string): NormalizedMetric {
   return {
     providerMetricId: `${provider}:${authIndex}:error`,
-    label: "Status",
+    label: `${provider} status`,
     unit: "",
     sourceValueKind: "status",
     sourceConfidence: "unknown",
@@ -1442,7 +1755,7 @@ function makeErrorMetric(provider: string, authIndex: string, error: string): No
 Run: `bun test tests/providers/cliproxy.test.ts`
 Expected: PASS
 
-- [ ] **Step 5: Register adapter in main.ts**
+- [ ] **Step 5: Register in main.ts**
 
 In `src/server/main.ts`, add:
 
@@ -1465,7 +1778,7 @@ Expected: PASS
 
 ```bash
 git add src/server/providers/cliproxy.ts tests/providers/cliproxy.test.ts src/server/main.ts
-git commit -m "feat(providers): add CLIProxyAPI adapter (auth-files discovery + api-call fan-out + codex/claude/xai)"
+git commit -m "feat(providers): add CLIProxyAPI adapter (auth-files + api-call + codex/claude/xai + timeouts + fast-fail)"
 ```
 
 ---
@@ -1476,9 +1789,9 @@ git commit -m "feat(providers): add CLIProxyAPI adapter (auth-files discovery + 
 - Modify: `config/dashboard.config.ts`
 - Modify: `.env.example`
 
-- [ ] **Step 1: Add example cliproxy provider to config**
+- [ ] **Step 1: Add example + .env + commit**
 
-In `config/dashboard.config.ts`, add to providers array:
+In `config/dashboard.config.ts`, add to providers (commented out):
 
 ```ts
   // CLIProxyAPI dynamic provider (auto-discovers codex/claude/xai accounts)
@@ -1487,7 +1800,7 @@ In `config/dashboard.config.ts`, add to providers array:
   //   apiKeyEnv: "CLIPROXY_MGMT_KEY" },
 ```
 
-Add `dynamicProviderIds` to the profile:
+Add `dynamicProviderIds` to profile (commented out):
 
 ```ts
   profiles: [
@@ -1501,9 +1814,7 @@ Add `dynamicProviderIds` to the profile:
   ],
 ```
 
-- [ ] **Step 2: Update .env.example**
-
-Append:
+Append to `.env.example`:
 
 ```env
 
@@ -1512,12 +1823,8 @@ CLIPROXY_BASE_URL=http://localhost:8317
 CLIPROXY_MGMT_KEY=
 ```
 
-- [ ] **Step 3: Run typecheck + tests**
-
 Run: `bun run typecheck && bun test`
 Expected: PASS
-
-- [ ] **Step 4: Commit**
 
 ```bash
 git add config/dashboard.config.ts .env.example
@@ -1536,37 +1843,9 @@ Expected: PASS
 - [ ] **Step 2: Run full test suite**
 
 Run: `bun test`
-Expected: PASS (all tests)
-
-- [ ] **Step 3: Verify no Poe regression**
-
-Run: `bun test tests/providers/poe.test.ts tests/dashboard/project.test.ts tests/config/load-config.test.ts tests/refresh/refresh-service.test.ts`
 Expected: PASS
 
-- [ ] **Step 4: Commit if any cleanup needed**
+- [ ] **Step 3: Verify no regression**
 
----
-
-## Self-Review Notes
-
-**Spec coverage:**
-- ✅ Dynamic subscription architecture (types, profile extension, ProviderRefreshResult) - Task 1
-- ✅ Storage migration + ProviderCacheRecord - Task 2
-- ✅ Config loading (cliproxy branch, SSRF exemption, dynamicProviderIds validation) - Task 3
-- ✅ Projection (dynamic branch, synthesizeMetricConfig, inferDisplayModule, summary exclusion) - Task 4
-- ✅ Refresh service (visibility union, dynamic snapshots write, dynamic snapshots read) - Task 5
-- ✅ CLIProxyAPI adapter (auth-files, api-call, 3 parsers, concurrency, error metrics) - Task 6
-- ✅ Config example + .env.example - Task 7
-- ✅ Codex reset_at Unix->ISO conversion - Task 6
-- ✅ Claude utilization NOT x100 - Task 6
-- ✅ Grok two endpoints merged - Task 6
-- ✅ Grok 5 required headers - Task 6
-- ✅ Failed accounts still get DynamicSubscription + error metric - Task 6
-- ✅ Unavailable accounts NOT skipped - Task 6
-- ✅ api-call 502 shape handling - Task 6
-- ✅ Management 404 -> "not enabled" - Task 6
-- ✅ Concurrency cap 6 - Task 6
-
-**Placeholder scan:** No TBD/TODO. All code complete.
-
-**Type consistency:** `DynamicSubscription` defined in Task 1, used in Tasks 2/4/5/6. `ProviderCacheRecord.dynamicSubscriptions` added in Task 2, read in Task 5. `createCliproxyProvider` defined in Task 6, registered in Task 6 Step 5.
+Run: `bun test tests/providers/poe.test.ts tests/dashboard/project.test.ts tests/config/load-config.test.ts tests/refresh/refresh-service.test.ts tests/storage/repositories.test.ts`
+Expected: PASS

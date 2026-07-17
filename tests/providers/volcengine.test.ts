@@ -90,6 +90,31 @@ test("volcengine AFP empty -> fallback to CodingPlanUsage", async () => {
   expect(result.metrics[0]!.notes).toContain("Coding Plan")
 })
 
+test("volcengine AFP network error -> fallback to CodingPlanUsage", async () => {
+  const calls: string[] = []
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    calls.push(url)
+    if (url.includes("GetAFPUsage")) {
+      throw new Error("timeout")
+    }
+    if (url.includes("GetCodingPlanUsage")) {
+      return makeResp(200, {
+        ResponseMetadata: {},
+        Result: {
+          QuotaUsage: [{ Level: "session", Percent: 40, ResetTime: "2026-07-17T05:00:00Z" }],
+        },
+      })
+    }
+    return makeResp(200, {})
+  }
+  const result = await createVolcengineProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(calls.filter((u) => u.includes("GetAFPUsage"))).toHaveLength(1)
+  expect(calls.filter((u) => u.includes("GetCodingPlanUsage"))).toHaveLength(1)
+  expect(result.metrics).toHaveLength(1)
+  expect(result.metrics[0]!.providerMetricId).toBe("cp:five_hour")
+})
+
 test("volcengine skips AFP windows with Quota <= 0", async () => {
   const raw = async (input: RequestInfo | URL): Promise<Response> => {
     if (String(input).includes("GetAFPUsage")) {
@@ -125,6 +150,16 @@ test("volcengine auth error via ResponseMetadata.Error code", async () => {
   const result = await createVolcengineProvider(raw as unknown as FakeFetch).refresh(buildInput())
   expect(result.errors![0]!.retryable).toBe(false)
   expect(result.errors![0]!.message).toContain("signature")
+})
+
+test("volcengine 'InvalidAuthorization' business envelope treated as auth error", async () => {
+  const raw = async (): Promise<Response> =>
+    makeResp(200, {
+      ResponseMetadata: { Error: { Code: "InvalidAuthorization", Message: "bad auth" } },
+    })
+  const result = await createVolcengineProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.errors![0]!.retryable).toBe(false)
+  expect(result.errors![0]!.message).toContain("auth")
 })
 
 test("volcengine non-auth API error non-retryable (business envelope)", async () => {

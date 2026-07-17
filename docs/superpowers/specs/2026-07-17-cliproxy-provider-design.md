@@ -1,6 +1,7 @@
 # CLIProxyAPI Provider Design
 
 Date: 2026-07-17
+Status: revised after two adversarial reviews (my own + Kimi K3 4-reviewer panel). All Critical/High issues from both reviews resolved. External API claims verified against CLIProxyAPI Go source, cc-switch Rust source, and CPAMP Go source.
 
 ## Goal
 
@@ -8,16 +9,18 @@ Add a CLIProxyAPI provider adapter that discovers upstream accounts (Codex, Clau
 
 ## Non-Goals
 
-- No CPAMP (CPA-Manager-Plus) dependency -- queries CLIProxyAPI directly.
-- No support for providers other than codex/claude/xai (gemini, openai-compatibility, etc. skipped -- no meaningful quota endpoint).
-- No write operations -- adapter only reads quota; does not call reset-quota or modify auth files.
-- No usage-queue consumption -- adapter queries live upstream quota, not historical request records.
+- No CPAMP dependency -- queries CLIProxyAPI directly.
+- No providers other than codex/claude/xai (gemini, openai-compatibility, etc. skipped).
+- No write operations -- adapter only reads quota.
+- No per-account include/exclude filtering -- a profile with `dynamicProviderIds` sees ALL discovered accounts. See Security Notes.
 
 ## Architecture
 
 ### Dynamic Subscription Concept
 
-Existing providers use config-declared subscriptions with static `providerMetricId` matching. CLIProxyAPI accounts are discovered at runtime via `GET /v0/management/auth-files`, so the adapter returns `dynamicSubscriptions[]` alongside `metrics[]`. The projection layer merges static and dynamic subscriptions into one unified `DashboardPayload`.
+CLIProxyAPI accounts are discovered at runtime via `GET /v0/management/auth-files`. The adapter returns `dynamicSubscriptions[]` alongside `metrics[]`. The projection layer merges static and dynamic subscriptions.
+
+**Storage-first pattern** (no in-memory cache): `dynamicSubscriptions` are stored on `ProviderCacheRecord` (via `dynamic_subscriptions_json` column), written in the same transaction as metrics/snapshots. `getPayload`/`buildPayloadFromStorage` reads from storage. This follows the existing codebase pattern and survives restarts.
 
 ### ProviderAccountConfig
 
@@ -26,11 +29,13 @@ Existing providers use config-declared subscriptions with static `providerMetric
     id: string
     type: "cliproxy"
     baseUrl: string                    // CLIProxyAPI address, e.g. http://localhost:8317
-    apiKeyEnv?: string                 // management key env var name
-    apiKey?: string                    // or literal key
-    queryProviders?: string[]          // optional, default ["codex","claude","xai"]
+    apiKeyEnv?: string
+    apiKey?: string
+    queryProviders?: string[]          // default ["codex","claude","xai"]
   }
 ```
+
+Must be added to the `ProviderAccountConfig` discriminated union in `src/shared/domain.ts`.
 
 ### ProfileConfig Extension
 
@@ -40,7 +45,7 @@ export type ProfileConfig = {
   name: string
   viewKey: string | undefined
   subscriptionIds: string[]
-  dynamicProviderIds?: string[]       // NEW: references dynamic providers like "cliproxy-main"
+  dynamicProviderIds?: string[]
 }
 ```
 
@@ -48,9 +53,9 @@ export type ProfileConfig = {
 
 ```ts
 export type DynamicSubscription = {
-  id: string                          // e.g. "cliproxy:codex:0"
-  name: string                        // e.g. "CLIProxy - Codex #1" (or label if available)
-  providerMetricIds: string[]         // metric IDs belonging to this subscription
+  id: string                    // e.g. "cliproxy:codex:a3f9c1e0"
+  name: string                  // e.g. "CLIProxy - alice@example.com" (or label, or "Codex #<short>")
+  providerMetricIds: string[]  // metric IDs for THIS account only (never other accounts)
   ui?: { color?: string; group?: string; sort?: number }
 }
 ```
@@ -60,7 +65,7 @@ export type DynamicSubscription = {
 ```ts
 export type ProviderRefreshResult = {
   // ... existing fields ...
-  dynamicSubscriptions?: DynamicSubscription[]  // NEW
+  dynamicSubscriptions?: DynamicSubscription[]
 }
 ```
 
@@ -68,20 +73,20 @@ export type ProviderRefreshResult = {
 
 | File | Change |
 |---|---|
-| `src/shared/domain.ts` | `ProfileConfig.dynamicProviderIds?`; `DynamicSubscription` type |
-| `src/server/providers/types.ts` | `ProviderRefreshResult.dynamicSubscriptions?`; `DynamicSubscription` import |
-| `src/server/providers/cliproxy.ts` | New adapter file |
-| `src/server/refresh/refresh-service.ts` | Cache `dynamicSubscriptions` per provider account; pass to projection |
-| `src/server/dashboard/project.ts` | `projectProviderMetrics` handles `dynamicProviderIds`; `inferDisplayModule` helper |
-| `src/server/config/load-config.ts` | Validate `dynamicProviderIds` references existing providers |
-| `src/server/http/app.ts` | Pass dynamic subscription data through to projection |
-| `src/server/storage/schema.ts` | Migration: `provider_cache.dynamic_subscriptions_json TEXT` |
-| `src/server/storage/repositories.ts` | Read/write `dynamic_subscriptions_json` |
-| `config/dashboard.config.ts` | Example cliproxy provider declaration |
-| `.env.example` | `CLIPROXY_MGMT_KEY=`, `CLIPROXY_BASE_URL=` |
+| `src/shared/domain.ts` | `ProfileConfig.dynamicProviderIds?`; `DynamicSubscription` type; `cliproxy` in `ProviderAccountConfig` union |
+| `src/server/providers/types.ts` | `ProviderRefreshResult.dynamicSubscriptions?` |
+| `src/server/providers/cliproxy.ts` | New adapter (auth-files discovery + api-call fan-out + 3 parsers) |
+| `src/server/refresh/refresh-service.ts` | `collectVisibleProviderAccounts` unions `dynamicProviderIds`; `writeProviderResult` writes dynamic snapshots; `buildPayloadFromStorage` loads dynamic snapshots/history + reads `dynamic_subscriptions_json` from storage |
+| `src/server/dashboard/project.ts` | `projectProviderMetrics` handles dynamic; `synthesizeMetricConfig`; `inferDisplayModule`; dynamic metrics excluded from `buildSummaryGroups` |
+| `src/server/config/load-config.ts` | Validate `dynamicProviderIds`; cliproxy-specific branch (required baseUrl, SSRF loopback exemption) |
+| `src/server/storage/schema.ts` | Migration 6: `ALTER TABLE provider_cache ADD COLUMN dynamic_subscriptions_json TEXT` |
+| `src/server/storage/repositories.ts` | `ProviderCacheRecord.dynamicSubscriptions?`; upsert SQL + decode include new column |
+| `config/dashboard.config.ts` | Example cliproxy provider |
+| `.env.example` | `CLIPROXY_BASE_URL=`, `CLIPROXY_MGMT_KEY=` |
 | `tests/providers/cliproxy.test.ts` | Adapter tests |
 | `tests/dashboard/project.test.ts` | Dynamic subscription projection tests |
-| `tests/refresh/refresh-service.test.ts` | Dynamic subscription caching tests |
+| `tests/refresh/refresh-service.test.ts` | Dynamic subscription persistence tests |
+| `tests/storage/repositories.test.ts` | `dynamic_subscriptions_json` round-trip |
 
 ## CLIProxyAPI Adapter (`cliproxy.ts`)
 
@@ -97,27 +102,29 @@ Response (filtered to relevant fields):
 {
   "files": [{
     "id": "...",
-    "auth_index": "0",
+    "auth_index": "a3f9c1e0",
     "provider": "codex",
-    "label": "Codex Pro #1",
+    "label": "alice@example.com",
     "disabled": false,
-    "unavailable": false,
+    "status": "active",
     "id_token": {
       "chatgpt_account_id": "acc_abc123",
       "plan_type": "pro"
-    },
-    "status": "active",
-    "success": 1523,
-    "failed": 12
+    }
   }]
 }
 ```
 
+**`auth_index` is a per-credential hex hash** (`sha256(seed)[:8]`), stable across restarts and unaffected by other accounts being added/removed. It changes only on file rename, auth dir move, or key/type change. (Verified: CLIProxyAPI `types.go:331-401`.)
+
 Filter rules:
-- `provider` must be in `queryProviders` (default `["codex","claude","xai"]`)
+- `provider` in `queryProviders` (default `["codex","claude","xai"]`)
 - `disabled === true` -> skip
-- `unavailable === true` -> skip
-- For `codex` provider: if `id_token.chatgpt_account_id` is missing -> skip with error
+- `status !== "active"` -> skip (authoritative skip signal, checked alongside `disabled`)
+- **`unavailable === true` -> DO NOT skip** (unavailable = quota exceeded / cooling down -- these are the accounts most worth showing)
+- `codex` without `id_token.chatgpt_account_id` -> do NOT skip; query without `ChatGPT-Account-Id` header (cc-switch sends it conditionally: `subscription.rs:686-688`)
+- **Management API not enabled (404)** -> non-retryable error "CLIProxyAPI management API not enabled. Set MANAGEMENT_PASSWORD or remote-management.secret-key."
+- **auth_index empty string** -> skip (edge case: empty seed)
 
 ### API-call Endpoint
 
@@ -134,12 +141,24 @@ Content-Type: application/json
 }
 ```
 
-Response:
+Response when management API succeeds (HTTP 200):
 ```json
 { "status_code": 200, "header": {...}, "body": "..." }
 ```
 
-`$TOKEN$` is replaced by CLIProxyAPI with the account's live credential token. The adapter never sees the actual token.
+Response when management API itself fails (HTTP 502 transport error):
+```json
+{ "error": "request failed" }
+```
+
+Response when management API not found (HTTP 400, e.g. auth_index not found):
+```json
+{ "error": "auth token not found" }
+```
+
+**Critical: the adapter must check `resp.status` (the HTTP status of the management api-call response) BEFORE parsing the body.** Only HTTP 200 from management has `{status_code, header, body}`. Other statuses have `{error}`.
+
+`$TOKEN$` is replaced server-side by CLIProxyAPI with the account's live token. The adapter never sees the real token. If `auth_index` doesn't match any credential, CLIProxyAPI sends the literal `$TOKEN$` upstream without substitution (`api_tools.go:147-149`) -- the upstream returns 401, which the adapter should report as "possible stale auth_index" in the error message.
 
 ### Per-Provider Quota Queries
 
@@ -147,40 +166,41 @@ Response:
 
 Upstream URL: `GET https://chatgpt.com/backend-api/wham/usage`
 
-Headers:
+Headers (verified against cc-switch `subscription.rs:680-688`):
 ```json
 {
   "Authorization": "Bearer $TOKEN$",
   "User-Agent": "codex-cli",
-  "ChatGPT-Account-Id": "<id_token.chatgpt_account_id>"
+  "Accept": "application/json"
 }
 ```
+`ChatGPT-Account-Id` header is **conditional** -- only sent when `id_token.chatgpt_account_id` is present. (cc-switch: `if let Some(id) = account_id { req = req.header("ChatGPT-Account-Id", id); }`)
 
-Response parsing (from cc-switch `subscription.rs:672`):
+Response parsing (verified: `subscription.rs:624-629`):
 ```json
 {
   "rate_limit": {
-    "primary_window": { "used_percent": 72.5, "limit_window_seconds": 18000, "reset_at": "2026-07-17T05:00:00Z" },
-    "secondary_window": { "used_percent": 45.0, "limit_window_seconds": 604800, "reset_at": "2026-07-24T00:00:00Z" }
+    "primary_window": { "used_percent": 72.5, "limit_window_seconds": 18000, "reset_at": 1752735600 },
+    "secondary_window": { "used_percent": 45.0, "limit_window_seconds": 604800, "reset_at": 1753254000 }
   }
 }
 ```
 
-Metrics produced:
-- `providerMetricId: "codex:<auth_index>:five_hour"`: `used = used_percent`, `limit = 100`, `window = { kind: "rolling", duration: "5h", resetAt: reset_at }`, `sourceValueKind: "gauge-used"`
-- `providerMetricId: "codex:<auth_index>:weekly"`: same with `"7d"` duration
+**`reset_at` is a Unix epoch integer (seconds), NOT an ISO string.** Adapter converts: `new Date(reset_at * 1000).toISOString()`.
 
 Window classification by `limit_window_seconds`:
-- 18000 (5h) -> `five_hour`
-- 604800 (7d) -> `weekly`
-- 2592000 (30d) -> `monthly`
+- 18000 (5h) -> `five_hour`, duration `"5h"`
+- 604800 (7d) -> `weekly`, duration `"7d"`
+- 2592000 (30d) -> `monthly`, duration `"30d"`
 - Other -> skip
+
+Metrics: `providerMetricId: "codex:<auth_index>:<window>"`, `used = used_percent`, `limit = 100`, `sourceValueKind: "gauge-used"`, `sourceConfidence: "known"`, `window = { kind: "rolling", duration, resetAt }`.
 
 #### Claude
 
 Upstream URL: `GET https://api.anthropic.com/api/oauth/usage`
 
-Headers:
+Headers (verified: `subscription.rs:342-346`):
 ```json
 {
   "Authorization": "Bearer $TOKEN$",
@@ -189,82 +209,131 @@ Headers:
 }
 ```
 
-Response parsing (from cc-switch `subscription.rs:338`):
+Response parsing (verified: `subscription.rs:284-427`):
 ```json
 {
-  "five_hour": { "utilization": 0.65, "resets_at": "2026-07-17T05:00:00Z" },
-  "seven_day": { "utilization": 0.40, "resets_at": "2026-07-24T00:00:00Z" },
+  "five_hour": { "utilization": 65.0, "resets_at": "2026-07-17T05:00:00Z" },
+  "seven_day": { "utilization": 40.0, "resets_at": "2026-07-24T00:00:00Z" },
+  "seven_day_opus": { "utilization": 20.0, "resets_at": "..." },
   "extra_usage": { "is_enabled": false }
 }
 ```
 
-Metrics produced:
-- `providerMetricId: "claude:<auth_index>:five_hour"`: `used = utilization * 100`, `limit = 100`, `window = { kind: "rolling", duration: "5h", resetAt: resets_at }`, `sourceValueKind: "gauge-used"`
-- `providerMetricId: "claude:<auth_index>:seven_day"`: same with `"7d"`
+**`utilization` is already 0-100, NOT 0-1. Do NOT multiply by 100.** (Verified: cc-switch `QuotaTier.utilization` is documented "0-100" at `subscription.rs:32`, assigned directly from API at `:399`.)
 
-`utilization` is a 0-1 fraction; adapter multiplies by 100.
+`resets_at` is an ISO string (verified: `subscription.rs:288`, `Option<String>`).
+
+Adapter iterates ALL top-level keys with `{utilization, resets_at}` shape, not just known ones (cc-switch: `:410-427` iterates unknown windows). `extra_usage` is skipped.
+
+Metrics: `providerMetricId: "claude:<auth_index>:<window_key>"`, `used = utilization`, `limit = 100`, `sourceValueKind: "gauge-used"`, `sourceConfidence: "known"`, `window = { kind: "rolling", duration: inferDuration(window_key), resetAt: resets_at }`.
+
+`inferDuration`: `five_hour` -> `"5h"`, `seven_day*` -> `"7d"`, other -> `"7d"` (default).
 
 #### Grok / xAI
 
-Upstream URL: `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`
+**Two endpoints** queried and merged (verified: CPAMP `xai_probe.go:170-193`):
+1. Weekly: `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`
+2. Monthly: `GET https://cli-chat-proxy.grok.com/v1/billing`
 
-Headers:
+Headers (verified: `xai_probe.go:159-168`):
 ```json
 {
-  "Authorization": "Bearer $TOKEN$"
+  "Authorization": "Bearer $TOKEN$",
+  "x-xai-token-auth": "xai-grok-cli",
+  "x-grok-client-version": "0.2.101",
+  "User-Agent": "grok-pager/0.2.101 grok-shell/0.2.101 (macos; aarch64)",
+  "Accept": "*/*"
 }
 ```
+Optionally `x-userid` header if `user_id`/`sub` is found in auth metadata.
 
-Response parsing (from CPAMP `xai_probe.go`):
+Response parsing (verified: `xai_probe.go:464-525`). The response has a `config` object:
 ```json
 {
   "config": {
-    "usage_percent": 30,
-    "period_end": "2026-07-24T00:00:00Z",
-    "monthly_limit_cents": 1000,
-    "on_demand_cap_cents": 500,
-    "on_demand_used_cents": 200
+    "credit_usage_percent": 30,
+    "monthly_limit": { "val": 1000 },
+    "used": { "val": 200 },
+    "on_demand_cap": { "val": 500 },
+    "on_demand_used": { "val": 100 },
+    "current_period": { "type": "weekly", "end": "2026-07-24T00:00:00Z" },
+    "billing_period_end": "2026-08-01T00:00:00Z",
+    "product_usage": [{ "product": "grok-4", "usage_percent": 25 }]
   }
 }
 ```
 
+Field semantics (from `parseXAIBillingSummary`):
+- `credit_usage_percent` -> weekly usage percent (0-100)
+- `monthly_limit.val` / `used.val` -> monthly limit / used in cents
+- `on_demand_cap.val` / `on_demand_used.val` -> on-demand cap / used in cents
+- `current_period.end` -> weekly reset time
+- `billing_period_end` -> monthly reset time
+- Monthly used percent is computed: `min(used, monthly_limit) / monthly_limit * 100`
+- On-demand used percent: `on_demand_used / on_demand_cap * 100`
+
+Fields may be `{val: number}` objects or raw numbers -- `readXAICentFloat` handles both.
+
 Metrics produced:
-- `providerMetricId: "xai:<auth_index>:weekly"`: `used = usage_percent`, `limit = 100`, `window = { kind: "rolling", duration: "7d", resetAt: period_end }`, `sourceValueKind: "gauge-used"`
-- `providerMetricId: "xai:<auth_index>:on_demand"`: `used = on_demand_used_cents`, `limit = on_demand_cap_cents`, `unit = "cents"`, `sourceValueKind: "gauge-used"` (no window -- on-demand is not periodic)
+- `providerMetricId: "xai:<auth_index>:weekly"`: `used = credit_usage_percent`, `limit = 100`, `window = { kind: "rolling", duration: "7d", resetAt: current_period.end }`
+- `providerMetricId: "xai:<auth_index>:monthly"`: `used = monthlyUsedPercent`, `limit = 100`, `window = { kind: "rolling", duration: "30d", resetAt: billing_period_end }`
+- `providerMetricId: "xai:<auth_index>:on_demand"`: `used = onDemandUsedPercent`, `limit = 100`, `window = undefined` (not periodic)
+
+Each metric only produced if the corresponding data is present (`HasWeeklyData` / `HasMonthlyData` flags).
 
 ### DynamicSubscription Generation
 
-For each discovered account:
+**Every discovered account (success or failure) produces a DynamicSubscription.** Failed accounts get an error metric so they stay visible (not silently disappearing).
 
 ```ts
 {
-  id: `cliproxy:${provider}:${auth_index}`,           // e.g. "cliproxy:codex:0"
-  name: label ? `CLIProxy - ${label}` : `CLIProxy - ${Provider} #${auth_index}`,
-  providerMetricIds: metrics.map(m => m.providerMetricId),
-  ui: { group: "CLIProxy", sort: <index> }
+  id: `cliproxy:${provider}:${auth_index}`,     // auth_index is hex hash, stable
+  name: label ? `CLIProxy - ${label}` : `CLIProxy - ${provider} #${auth_index.slice(0, 8)}`,
+  providerMetricIds: [/* only this account's metric IDs */],
+  ui: { group: "CLIProxy" }
 }
 ```
 
-### Concurrency
+### Error Metric for Failed Accounts
 
-Adapter internally fans out `api-call` requests for all discovered accounts using `Promise.allSettled`. Each account failure produces an error metric (status type) without affecting other accounts. Overall adapter failure (auth-files request fails) returns a single retryable error.
+When an account's api-call fails or parsing fails, the adapter produces a status metric:
+```ts
+{
+  providerMetricId: `${provider}:${auth_index}:error`,
+  label: "Status",
+  unit: "",
+  sourceValueKind: "status",
+  sourceConfidence: "unknown",
+  notes: "upstream error: <detail>"  // or "auth failed", "parse error", etc.
+}
+```
+This metric is included in the account's `providerMetricIds` so the subscription renders a status card.
 
 ### Error Handling
 
 | Scenario | Classification |
 |---|---|
+| auth-files 404 (management not enabled) | `retryable: false`, "CLIProxyAPI management API not enabled" |
 | auth-files 401/403 | `retryable: false`, "CLIProxyAPI authentication failed" |
 | auth-files 5xx/429 | `retryable: true` |
 | auth-files network error | `retryable: true` |
-| Individual api-call upstream 401/403 | Account-level error metric, `sourceValueKind: "status"`, `notes: "auth failed"` |
-| Individual api-call upstream 5xx | Account-level error metric, `notes: "upstream error"` |
-| Individual api-call parse failure | Account-level error metric, `notes: "parse error"` |
-| Codex missing chatgpt_account_id | Skip account, collect error in adapter-level errors[] |
-| CLIProxyAPI api-call returns 502 (transport failure) | `retryable: true` |
+| api-call management HTTP 502 | `retryable: true` (transport failure) |
+| api-call management HTTP 400 "auth token not found" | Account-level error metric, `notes: "stale auth_index"` |
+| api-call upstream status_code 401/403 | Account-level error metric, `notes: "upstream auth failed (possible stale auth_index)"` |
+| api-call upstream status_code 5xx | Account-level error metric, `notes: "upstream error (NNN)"` |
+| api-call body parse failure | Account-level error metric, `notes: "parse error"` |
+| Management key missing | `retryable: false`, "unavailable" |
+
+### Concurrency
+
+- **Intra-adapter fan-out cap: 6** (not unbounded `Promise.allSettled`). Process accounts in batches of 6.
+- **Per-api-call timeout: 70 seconds** (AbortController). CLIProxyAPI's own timeout is 60s; 70s lets its 502 trigger first.
+- **Overall adapter deadline: 120 seconds.** Abort remaining requests if exceeded.
+- **Fast-fail on auth**: if first batch of api-call requests all return 401 from management API, abort remaining (avoids triggering CLIProxyAPI's 5-failure -> 30-min IP ban).
 
 ### staleAfter
 
-`fetchedAt + 5min` (shorter than other adapters -- quota state changes frequently and api-call is lightweight).
+`fetchedAt + 5min`.
 
 ## Projection Layer Changes
 
@@ -285,7 +354,7 @@ for (const providerId of input.dynamicProviderIds ?? []) {
       const matchedMetric = providerProjection?.metrics.find(
         m => m.providerMetricId === providerMetricId,
       )
-      if (!matchedMetric) continue  // account not returned this refresh
+      if (!matchedMetric) continue
       
       const metricKey = buildMetricKey(providerId, dynSub.id, providerMetricId)
       result.push({
@@ -312,8 +381,6 @@ for (const providerId of input.dynamicProviderIds ?? []) {
 
 ### `synthesizeMetricConfig` Helper
 
-Dynamic metrics have no `MetricConfig` in the config file. Synthesize one from the `NormalizedMetric`:
-
 ```ts
 function synthesizeMetricConfig(m: NormalizedMetric, providerMetricId: string): MetricConfig {
   return {
@@ -323,6 +390,7 @@ function synthesizeMetricConfig(m: NormalizedMetric, providerMetricId: string): 
     unit: m.unit,
     sourceValueKind: m.sourceValueKind,
     display: { module: inferDisplayModule(m) },
+    ...(m.notes ? { notes: m.notes } : {}),
     ...(m.window ? { window: m.window } : {}),
   }
 }
@@ -337,7 +405,11 @@ function inferDisplayModule(m: NormalizedMetric): DisplayModule {
 
 ### `buildSubscriptions` -- Unchanged
 
-`buildSubscriptions` groups `ProjectedMetric[]` by `subscriptionId`. Dynamic subscription IDs (e.g. `cliproxy:codex:0`) are distinct from static ones (e.g. `poe-api`), so they naturally form new `DashboardSubscription` entries without conflict.
+Groups by `subscriptionId`. Dynamic IDs are distinct from static ones.
+
+### `buildSummaryGroups` -- Dynamic Metrics Excluded
+
+Dynamic metrics are excluded from summary aggregation (summing percentages across N accounts is meaningless). Implementation: skip `ProjectedMetric` entries where `subscriptionId` starts with `"cliproxy:"` in `buildSummaryGroups`, or tag them with a flag.
 
 ### `buildDashboardPayload` Input Extension
 
@@ -350,107 +422,234 @@ export type DashboardProjectionInput = {
   providers: Array<ProviderAccountProjection>
   snapshots?: Map<string, SnapshotPoint[]>
   storedHistory?: Map<string, ProjectedHistoryPoint[]>
-  dynamicSubscriptions?: Map<string, DynamicSubscription[]>  // NEW
+  dynamicSubscriptions?: Map<string, DynamicSubscription[]>
 }
 
 export type ProjectProviderMetricsInput = {
   config: NormalizedConfig
   subscriptionIds: string[]
-  dynamicProviderIds?: string[]                               // NEW
+  dynamicProviderIds?: string[]
   providers: Array<ProviderAccountProjection>
   snapshots?: Map<string, SnapshotPoint[]>
   storedHistory?: Map<string, ProjectedHistoryPoint[]>
-  dynamicSubscriptions?: Map<string, DynamicSubscription[]>  // NEW
+  dynamicSubscriptions?: Map<string, DynamicSubscription[]>
   now: string
 }
 ```
 
-### `buildDashboardPayload` Passes Dynamic Data
-
-```ts
-const profile = input.config.profiles.get(input.profileId)
-const projected = projectProviderMetrics({
-  config: input.config,
-  subscriptionIds: profile.subscriptionIds,
-  ...(profile.dynamicProviderIds ? { dynamicProviderIds: profile.dynamicProviderIds } : {}),
-  providers: input.providers,
-  now: input.generatedAt,
-  ...(input.snapshots ? { snapshots: input.snapshots } : {}),
-  ...(input.storedHistory ? { storedHistory: input.storedHistory } : {}),
-  ...(input.dynamicSubscriptions ? { dynamicSubscriptions: input.dynamicSubscriptions } : {}),
-})
-```
-
 ## Refresh Service Changes
 
-### Dynamic Subscription Caching
+### `collectVisibleProviderAccounts` -- Union Dynamic Providers
 
 ```ts
-// In-memory cache: providerAccountId -> latest dynamicSubscriptions
-const dynamicSubscriptionsCache = new Map<string, DynamicSubscription[]>()
-
-// After refreshProviderAccount succeeds:
-if (result.dynamicSubscriptions) {
-  dynamicSubscriptionsCache.set(paId, result.dynamicSubscriptions)
+function collectVisibleProviderAccounts(profileId: string): string[] {
+  const profile = config.profiles.get(profileId)
+  if (!profile) return []
+  const seen = new Set<string>()
+  for (const subId of profile.subscriptionIds) {
+    const sub = config.subscriptions.get(subId)
+    if (sub) seen.add(sub.providerId)
+  }
+  // NEW: include dynamic providers
+  for (const dynProviderId of profile.dynamicProviderIds ?? []) {
+    seen.add(dynProviderId)
+  }
+  return Array.from(seen)
 }
+```
 
-// In getPayload / buildPayloadFromStorage:
-const dynamicSubscriptions = new Map<string, DynamicSubscription[]>()
-for (const paId of collectDynamicProviderAccounts(profileId)) {
-  const cached = dynamicSubscriptionsCache.get(paId)
-  if (cached) {
-    dynamicSubscriptions.set(paId, cached)
-  } else {
-    // Fallback: read from storage (provider_cache.dynamic_subscriptions_json)
-    const stored = storage.providerCache.getDynamicSubscriptions(paId)
-    if (stored) dynamicSubscriptions.set(paId, stored)
+This is **the critical fix** -- without it, the adapter is never called.
+
+### `writeProviderResult` -- Write Dynamic Snapshots
+
+After the existing snapshot loop (which iterates `subMetrics` from config), add a second loop for dynamic subscriptions:
+
+```ts
+// Write snapshots for dynamic subscriptions
+if (result.dynamicSubscriptions) {
+  for (const dynSub of result.dynamicSubscriptions) {
+    for (const providerMetricId of dynSub.providerMetricIds) {
+      const matched = result.metrics.find(m => m.providerMetricId === providerMetricId)
+      if (!matched || matched.remaining === undefined && matched.used === undefined) continue
+      const metricKey = buildMetricKey(paId, dynSub.id, providerMetricId)
+      snapshotRows.push({
+        metricKey,
+        timestamp: result.fetchedAt,
+        ...(matched.authoritativeValue !== undefined ? { authoritativeValue: matched.authoritativeValue } : {}),
+        ...(matched.used !== undefined ? { used: matched.used } : {}),
+        ...(matched.remaining !== undefined ? { remaining: matched.remaining } : {}),
+        ...(matched.limit !== undefined ? { limit: matched.limit } : {}),
+        sourceValueKind: matched.sourceValueKind,
+      })
+    }
   }
 }
 ```
 
-### `collectDynamicProviderAccounts` Helper
+### `writeProviderResult` -- Persist dynamicSubscriptions
+
+Store `dynamicSubscriptions` on `ProviderCacheRecord` in the same transaction:
 
 ```ts
-function collectDynamicProviderAccounts(profileId: string): string[] {
-  const profile = config.profiles.get(profileId)
-  if (!profile?.dynamicProviderIds) return []
-  return profile.dynamicProviderIds
+const cacheRecord: ProviderCacheRecord = {
+  // ... existing fields ...
+  ...(result.dynamicSubscriptions ? { dynamicSubscriptions: result.dynamicSubscriptions } : {}),
 }
 ```
 
-### `getPayload` and `buildPayloadFromStorage` Pass Dynamic Data
+**Semantics**: on adapter success, `dynamicSubscriptions` is overwritten (including empty array if 0 accounts found). On adapter failure (no `dynamicSubscriptions` returned), the old cached value is preserved (last-good). This matches the existing `normalized_json` preservation behavior.
 
-Both functions build the `DashboardProjectionInput`. They add:
+### `buildPayloadFromStorage` -- Load Dynamic Snapshots/History
+
+After the existing loop over `profile.subscriptionIds`, add:
+
 ```ts
-...(dynamicSubscriptions.size > 0 ? { dynamicSubscriptions } : {})
+// Load snapshots/history for dynamic subscriptions
+for (const dynProviderId of profile.dynamicProviderIds ?? []) {
+  const cache = storage.providerCache.get(dynProviderId)
+  const dynamicSubs = cache?.dynamicSubscriptions ?? []
+  for (const dynSub of dynamicSubs) {
+    for (const providerMetricId of dynSub.providerMetricIds) {
+      const metricKey = buildMetricKey(dynProviderId, dynSub.id, providerMetricId)
+      // Load history
+      const history = storage.historyEvents.listForMetric(metricKey, rangeStartMs, nowMs)
+      if (history.length > 0) {
+        storedHistory.set(metricKey, history.map(/* ... */))
+      }
+      // Load snapshots
+      const snaps = storage.snapshots.listForMetric(metricKey, rangeStartMs, nowMs)
+      if (snaps.length > 0) {
+        snapshots.set(metricKey, snaps)
+      }
+    }
+  }
+  // Pass dynamicSubscriptions to projection
+  if (dynamicSubs.length > 0) {
+    dynamicSubscriptions.set(dynProviderId, dynamicSubs)
+  }
+}
 ```
+
+### `getPayload` -- Same Pattern
+
+`getPayload` (reads from in-memory cache after refresh) also passes `dynamicSubscriptions` from the cache record.
 
 ## Storage Changes
 
 ### Migration (schema.ts)
 
 ```ts
-// Migration 6 (or next available number)
-migrations.push({
+// In MIGRATIONS array (type is { version: number; sql: string })
+{
   version: 6,
-  up: [
-    `ALTER TABLE provider_cache ADD COLUMN dynamic_subscriptions_json TEXT`,
-  ],
-})
+  sql: "ALTER TABLE provider_cache ADD COLUMN dynamic_subscriptions_json TEXT",
+}
 ```
 
-### repositories.ts
+### ProviderCacheRecord Extension (repositories.ts)
 
-`provider_cache` upsert: if `dynamicSubscriptions` is present, JSON-serialize and store in `dynamic_subscriptions_json`.
+```ts
+export type ProviderCacheRecord = {
+  providerAccountId: string
+  fetchedAt: string
+  staleAfter: string
+  status: "ok" | "stale" | "unavailable"
+  normalized: { metrics: NormalizedMetric[] }
+  errors: Array<{ message: string; retryable: boolean }>
+  dynamicSubscriptions?: DynamicSubscription[]  // NEW
+}
+```
 
-`provider_cache` read: if `dynamic_subscriptions_json` is non-null, JSON-parse into `DynamicSubscription[]`.
+### Upsert SQL
+
+Add `dynamic_subscriptions_json` to the INSERT and `on conflict do update`:
+
+```sql
+INSERT INTO provider_cache (
+  provider_account_id, fetched_at, stale_after, status,
+  normalized_json, error_json, dynamic_subscriptions_json
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(provider_account_id) DO UPDATE SET
+  fetched_at = excluded.fetched_at,
+  stale_after = excluded.stale_after,
+  status = excluded.status,
+  normalized_json = excluded.normalized_json,
+  error_json = excluded.error_json,
+  dynamic_subscriptions_json = excluded.dynamic_subscriptions_json
+```
+
+When `dynamicSubscriptions` is undefined (adapter failure, no update): pass `null` for the column in the SQL -- but **only when preserving old data** (adapter failure path). On success: pass `JSON.stringify(dynamicSubscriptions)` (including `[]` for zero accounts).
+
+### Decode
+
+```ts
+function decodeProviderCache(row: Record<string, unknown>): ProviderCacheRecord {
+  // ... existing fields ...
+  const dynJson = row["dynamic_subscriptions_json"] as string | null
+  return {
+    // ... existing fields ...
+    ...(dynJson ? { dynamicSubscriptions: JSON.parse(dynJson) as DynamicSubscription[] } : {}),
+  }
+}
+```
 
 ## Config Loading Changes
+
+### CLIProxyAPI Branch
+
+**Do NOT add "cliproxy" to `API_KEY_PROVIDER_TYPES`.** Instead, add a dedicated branch BEFORE the `API_KEY_PROVIDER_TYPES` check:
+
+```ts
+if (provider.type === "cliproxy") {
+  if (!provider.baseUrl || provider.baseUrl === "") {
+    fail(`${providerPath}.baseUrl`, "cliproxy requires baseUrl")
+  }
+  // SSRF: cliproxy is a trusted local sidecar -- exempt from loopback rejection
+  // (validateBaseUrl still rejects non-loopback private ranges like 10.x, 192.168.x)
+  validateBaseUrlSkipLoopback(provider.baseUrl, `${providerPath}.baseUrl`)
+  const { apiKey, reason } = resolveBearerCredential(provider)
+  const state: ProviderRuntimeState = { available: apiKey !== undefined }
+  if (apiKey !== undefined) state.apiKey = apiKey
+  if (reason !== undefined) state.reason = reason
+  providers.set(provider.id, provider)
+  providerRuntime.set(provider.id, state)
+} else if (API_KEY_PROVIDER_TYPES.has(provider.type)) {
+  // ... existing branch ...
+}
+```
+
+### SSRF Loopback Exemption for cliproxy
+
+CLIProxyAPI is by design a local sidecar (`localhost:8317`). The loopback check must be exempted:
+
+```ts
+function validateBaseUrlSkipLoopback(baseUrl: string, path: string): void {
+  let parsed: URL
+  try { parsed = new URL(baseUrl) } catch { fail(path, `invalid URL`) }
+  const host = parsed.hostname.toLowerCase()
+  // Allow loopback for trusted local services (cliproxy sidecar)
+  if (isLoopbackOrPrivateHost(host) && !isLoopbackOnly(host)) {
+    fail(path, `host "${host}" is private (non-loopback)`)
+  }
+  // No allowlist for cliproxy -- user-supplied CLIProxyAPI address
+}
+
+function isLoopbackOnly(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|]$/g, "")
+  if (h === "localhost") return true
+  // IPv4 loopback
+  if (/^127\./.test(h)) return true
+  // IPv6 loopback
+  if (h === "::1" || h === "::") return true
+  return false
+}
+```
+
+This allows `localhost`, `127.x.x.x`, `::1` but still rejects `10.x`, `192.168.x`, `172.16-31.x`, CGNAT, and all IPv6 private ranges.
 
 ### Validation
 
 ```ts
-// Validate dynamicProviderIds references
 for (const profile of input.profiles) {
   for (const dynProviderId of profile.dynamicProviderIds ?? []) {
     if (!providers.has(dynProviderId)) {
@@ -461,32 +660,17 @@ for (const profile of input.profiles) {
 }
 ```
 
-### CLIProxyAPI Credential Resolution
-
-CLIProxyAPI uses a management key (not a standard API key). Reuse `resolveBearerCredential`:
-
-```ts
-if (provider.type === "cliproxy") {
-  if (!provider.baseUrl || provider.baseUrl === "") {
-    fail(`${providerPath}.baseUrl`, "cliproxy requires baseUrl")
-  }
-  validateBaseUrl(provider.baseUrl, "cliproxy", `${providerPath}.baseUrl`)
-  const { apiKey, reason } = resolveBearerCredential(provider)
-  const state: ProviderRuntimeState = { available: apiKey !== undefined }
-  if (apiKey !== undefined) state.apiKey = apiKey
-  if (reason !== undefined) state.reason = reason
-  providers.set(provider.id, provider)
-  providerRuntime.set(provider.id, state)
-}
-```
-
-Add `"cliproxy"` to `API_KEY_PROVIDER_TYPES` set.
-
 ## main.ts Registration
 
 ```ts
 ["cliproxy", createCliproxyProvider()],
 ```
+
+## Security Notes
+
+- The management key grants full management API access (auth file CRUD, reset quota, api-call proxy). Store in env var, not config file. Document this risk.
+- `dynamicProviderIds` is all-or-nothing per profile -- a profile sees ALL accounts of that CLIProxyAPI instance. No per-account filtering in this version (listed as Non-Goal). Multi-profile deployments should use separate CLIProxyAPI instances or accept shared visibility.
+- `$TOKEN$` substitution is server-side; the dashboard never sees upstream tokens.
 
 ## Testing Strategy
 
@@ -494,35 +678,40 @@ Add `"cliproxy"` to `API_KEY_PROVIDER_TYPES` set.
 
 - Fake fetch intercepts both `/v0/management/auth-files` and `/v0/management/api-call`
 - Assert:
-  - auth-files parsing: discovers accounts, filters by provider type, skips disabled
-  - Codex: correct api-call body (url + headers + `$TOKEN$` + `ChatGPT-Account-Id`), parses `rate_limit` windows
-  - Claude: correct api-call body (url + `anthropic-beta` header), parses `five_hour`/`seven_day` utilization
-  - Grok: correct api-call body, parses `config` billing summary
-  - DynamicSubscription generation: correct IDs, names, providerMetricIds
-  - Concurrency: all accounts queried (not serial)
-  - Individual account failure: error metric produced, other accounts unaffected
-  - auth-files 401: non-retryable adapter-level error
-  - auth-files 500: retryable
-  - Codex missing chatgpt_account_id: skip with error
-  - Management key missing: non-retryable "unavailable" error
+  - auth-files: discovers accounts, filters by provider, skips disabled/status!=active, does NOT skip unavailable
+  - Codex: correct api-call body (url + headers + conditional ChatGPT-Account-Id), `reset_at` Unix->ISO conversion, window classification
+  - Claude: correct api-call body + `anthropic-beta` header, `utilization` used directly (no ×100), iterates unknown windows
+  - Grok: two endpoints queried, required headers, `config` field parsing, merge weekly+monthly
+  - DynamicSubscription: every account (success+failure) gets one, providerMetricIds only include own metrics
+  - Error metric: failed account gets status metric with notes
+  - api-call 502: retryable error
+  - api-call 400 "auth token not found": account error with "stale auth_index"
+  - auth-files 404: "management API not enabled"
+  - auth-files 401: non-retryable
+  - Concurrency cap: max 6 concurrent api-calls
+  - Fast-fail: first batch all 401 -> abort remaining
 
-### Projection Tests (`tests/dashboard/project.test.ts`)
+### Projection Tests
 
-- Dynamic subscription projection: `dynamicProviderIds` + `dynamicSubscriptions` -> produces ProjectedMetric with synthetic MetricConfig
-- `inferDisplayModule`: rolling -> `rolling-window-card`, status -> `manual-status-card`, default -> `balance-card`
-- Mixed: static subscription (poe-api) + dynamic subscription (cliproxy:codex:0) in same payload
-- Dynamic subscription absent (not yet refreshed): no metrics for that subscription (graceful degradation)
+- Dynamic subscription projection produces ProjectedMetric with synthetic MetricConfig
+- `inferDisplayModule` mapping
+- Mixed static + dynamic in same payload
+- Dynamic absent (no refresh yet): no metrics (graceful)
+- Dynamic excluded from `buildSummaryGroups`
 
-### Refresh Service Tests (`tests/refresh/refresh-service.test.ts`)
+### Refresh Service Tests
 
-- dynamicSubscriptions cached after refresh
-- getPayload passes dynamicSubscriptions to projection
-- Storage fallback: reads `dynamic_subscriptions_json` when in-memory cache empty
+- `collectVisibleProviderAccounts` includes dynamic providers
+- `writeProviderResult` writes dynamic snapshots
+- `buildPayloadFromStorage` loads dynamic snapshots/history
+- `dynamicSubscriptions` persisted to storage, survives restart simulation
+- Adapter failure preserves old `dynamicSubscriptions` (last-good)
 
 ### Storage Tests
 
-- Migration 6: `dynamic_subscriptions_json` column exists
-- Round-trip: write dynamicSubscriptions -> read back -> identical
+- Migration 6: column exists
+- Round-trip: write -> read -> identical
+- Null column: `dynamicSubscriptions` undefined
 
 ## Config & Environment
 
@@ -550,12 +739,12 @@ CLIPROXY_MGMT_KEY=
 
 ## Implementation Order
 
-1. **Types**: `domain.ts` (`ProfileConfig.dynamicProviderIds`, `DynamicSubscription`), `types.ts` (`ProviderRefreshResult.dynamicSubscriptions`)
-2. **Storage**: migration + repositories read/write `dynamic_subscriptions_json`
-3. **Projection**: `projectProviderMetrics` dynamic subscription branch + `synthesizeMetricConfig` + `inferDisplayModule`
-4. **Refresh service**: cache dynamicSubscriptions, pass to projection in getPayload/buildPayloadFromStorage
-5. **Config loading**: validate `dynamicProviderIds`, add cliproxy to `API_KEY_PROVIDER_TYPES`
-6. **CLIProxyAPI adapter**: `cliproxy.ts` (auth-files discovery + api-call fan-out + per-provider parsing)
+1. **Types**: `domain.ts` (`ProfileConfig.dynamicProviderIds`, `DynamicSubscription`, `cliproxy` union member), `types.ts` (`ProviderRefreshResult.dynamicSubscriptions`)
+2. **Storage**: migration + `ProviderCacheRecord` + upsert SQL + decode
+3. **Config loading**: cliproxy branch + SSRF exemption + `dynamicProviderIds` validation
+4. **Projection**: `projectProviderMetrics` dynamic branch + `synthesizeMetricConfig` + `inferDisplayModule` + summary exclusion
+5. **Refresh service**: `collectVisibleProviderAccounts` union + `writeProviderResult` dynamic snapshots + `buildPayloadFromStorage` dynamic loading
+6. **CLIProxyAPI adapter**: `cliproxy.ts` (auth-files + api-call fan-out + 3 parsers + concurrency + error metrics)
 7. **Registration**: main.ts
 8. **Tests**: adapter + projection + refresh-service + storage
 9. **Config & docs**: example config + .env.example
@@ -565,12 +754,27 @@ CLIPROXY_MGMT_KEY=
 | Question | Decision |
 |---|---|
 | Account discovery | Fully automatic via `GET /v0/management/auth-files` |
-| Provider filter | Only codex/claude/xai (configurable via `queryProviders`) |
-| Codex account ID | Extract from `id_token.chatgpt_account_id` in auth-files response |
-| Display | Each account = one dynamic subscription; `ui.group: "CLIProxy"` |
-| Architecture | Modified to support dynamic subscriptions via `dynamicProviderIds` on profile |
-| Dynamic subscription source | Adapter returns `dynamicSubscriptions[]`; cached in memory + storage |
-| Dynamic metric config | Synthesized from `NormalizedMetric` via `synthesizeMetricConfig` + `inferDisplayModule` |
-| Storage | `provider_cache.dynamic_subscriptions_json` column (1 migration) |
-| staleAfter | 5 min (shorter than others -- quota changes frequently) |
-| Concurrency | `Promise.allSettled` for all accounts; individual failure -> error metric |
+| Provider filter | Only codex/claude/xai |
+| Codex account_id | Conditional header, not required (cc-switch parity) |
+| Display | Each account = one DynamicSubscription (including failed) |
+| Architecture | Storage-first (no in-memory cache); `dynamic_subscriptions_json` on ProviderCacheRecord |
+| Dynamic metric config | Synthesized from NormalizedMetric |
+| Storage | `provider_cache.dynamic_subscriptions_json` column (migration 6, type `{version, sql}`) |
+| Codex reset_at | Unix epoch seconds -> ISO conversion in adapter |
+| Claude utilization | 0-100, used directly (NO ×100) |
+| Claude windows | Iterate ALL keys with {utilization, resets_at} (not just known) |
+| Grok endpoints | Two URLs (weekly + monthly), merged; 5 required headers |
+| Grok response shape | `config` object with `credit_usage_percent`, `monthly_limit.val`, `used.val`, `on_demand_cap.val`, `on_demand_used.val`, `current_period.end`, `billing_period_end` |
+| SSRF | Loopback exempted for cliproxy (trusted sidecar); non-loopback private still rejected |
+| Migration type | `{ version: number; sql: string }` (not `{version, up:[]}`) |
+| Refresh visibility | `collectVisibleProviderAccounts` unions `dynamicProviderIds` |
+| Snapshot persistence | `writeProviderResult` writes dynamic snapshots in same transaction |
+| Snapshot loading | `buildPayloadFromStorage` loads dynamic snapshots/history |
+| Failed accounts | Still produce DynamicSubscription with error metric |
+| Unavailable accounts | NOT skipped (quota exceeded = most important to show) |
+| Summary aggregation | Dynamic metrics excluded (summing cross-account % is meaningless) |
+| Concurrency | Cap 6, per-call timeout 70s, overall deadline 120s, fast-fail on auth |
+| 502 response shape | Check management HTTP status before parsing body |
+| Config branch | Dedicated cliproxy branch (not in API_KEY_PROVIDER_TYPES) |
+| Management 404 | Non-retryable, "management API not enabled" |
+| dynamicSubscriptions on failure | Preserved (last-good); on success: overwritten (including empty []) |

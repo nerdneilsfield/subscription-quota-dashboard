@@ -856,3 +856,113 @@ test("percent-based metric at 100% shows critical (NOT isOverLimit)", () => {
   // used=100, percentUsed=100, hits critical threshold, NOT isOverLimit (gauge-remaining only)
   expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("critical")
 })
+
+test("dynamic subscription projection produces metrics with synthetic config", () => {
+  const config = makeConfig({
+    providers: [
+      { id: "poe-main", type: "poe", apiKey: "k" },
+      { id: "cp-main", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+    ],
+    subscriptions: baseSubscriptions,
+    profiles: [{
+      id: "self", name: "Personal", viewKey: "k",
+      subscriptionIds: ["poe-api"],
+      dynamicProviderIds: ["cp-main"],
+    }],
+  })
+  const dynSubs = new Map([["cp-main", [{
+    id: "cliproxy:codex:abc123",
+    name: "CLIProxy - Codex #1",
+    providerMetricIds: ["codex:abc123:five_hour"],
+    ui: { group: "CLIProxy" },
+  }]]])
+  const providers: ProviderAccountProjection[] = [
+    {
+      providerAccountId: "cp-main",
+      metrics: [{
+        providerMetricId: "codex:abc123:five_hour",
+        label: "5h", unit: "%",
+        used: 72, limit: 100,
+        sourceValueKind: "gauge-used", sourceConfidence: "known",
+        window: { kind: "rolling", duration: "5h", resetAt: "2026-07-17T05:00:00Z" },
+      }],
+      cache: okCache,
+    },
+  ]
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW,
+    selectedRange: "24h", providers,
+    dynamicSubscriptions: dynSubs,
+  })
+  expect(payload.subscriptions).toHaveLength(2)
+  const dynSub = payload.subscriptions.find(s => s.id === "cliproxy:codex:abc123")!
+  expect(dynSub.name).toBe("CLIProxy - Codex #1")
+  expect(dynSub.metrics).toHaveLength(1)
+  expect(dynSub.metrics[0]!.label).toBe("5h")
+  expect(dynSub.metrics[0]!.used).toBe(72)
+  expect(dynSub.metrics[0]!.display.module).toBe("rolling-window-card")
+})
+
+test("dynamic metrics excluded from summary groups", () => {
+  const config = makeConfig({
+    providers: [
+      { id: "poe-main", type: "poe", apiKey: "k" },
+      { id: "cp-main", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+    ],
+    subscriptions: baseSubscriptions,
+    profiles: [{
+      id: "self", name: "Personal", viewKey: "k",
+      subscriptionIds: ["poe-api"],
+      dynamicProviderIds: ["cp-main"],
+    }],
+  })
+  const dynSubs = new Map([["cp-main", [{
+    id: "cliproxy:codex:abc123",
+    name: "CLIProxy - Codex",
+    providerMetricIds: ["codex:abc123:five_hour"],
+  }]]])
+  const providers: ProviderAccountProjection[] = [
+    {
+      providerAccountId: "cp-main",
+      metrics: [{
+        providerMetricId: "codex:abc123:five_hour",
+        label: "5h", unit: "%", used: 72, limit: 100,
+        sourceValueKind: "gauge-used", sourceConfidence: "known",
+        window: { kind: "rolling", duration: "5h", resetAt: "2026-07-17T05:00:00Z" },
+      }],
+      cache: okCache,
+    },
+  ]
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW,
+    selectedRange: "24h", providers,
+    dynamicSubscriptions: dynSubs,
+  })
+  for (const g of payload.summaryGroups) {
+    expect(g.id).not.toContain("cliproxy")
+  }
+})
+
+test("dynamic subscription absent (no data) -> no metrics, graceful", () => {
+  const config = makeConfig({
+    providers: [
+      { id: "poe-main", type: "poe", apiKey: "k" },
+      { id: "cp-main", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+    ],
+    subscriptions: baseSubscriptions,
+    profiles: [{
+      id: "self", name: "Personal", viewKey: "k",
+      subscriptionIds: ["poe-api"],
+      dynamicProviderIds: ["cp-main"],
+    }],
+  })
+  const providers: ProviderAccountProjection[] = [
+    { providerAccountId: "cp-main", metrics: [] },
+  ]
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW,
+    selectedRange: "24h", providers,
+  })
+  expect(payload.subscriptions).toHaveLength(1)
+  expect(payload.subscriptions[0]!.id).toBe("poe-api")
+})

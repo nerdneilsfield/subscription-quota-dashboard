@@ -5,6 +5,8 @@
 // rules, and Status calculation).
 
 import type {
+  DisplayModule,
+  DynamicSubscription,
   LimitWindow,
   MetricConfig,
   MetricStatus,
@@ -91,6 +93,7 @@ export type ProjectedMetric = {
   normalizedUsageFilter: string
   projectedHistory: ProjectedHistoryPoint[]
   snapshots: SnapshotPoint[]
+  dynamic?: boolean
 }
 
 export type DashboardProjectionInput = {
@@ -101,14 +104,17 @@ export type DashboardProjectionInput = {
   providers: Array<ProviderAccountProjection>
   snapshots?: Map<string, SnapshotPoint[]>
   storedHistory?: Map<string, ProjectedHistoryPoint[]>
+  dynamicSubscriptions?: Map<string, DynamicSubscription[]>
 }
 
 export type ProjectProviderMetricsInput = {
   config: NormalizedConfig
   subscriptionIds: string[]
+  dynamicProviderIds?: string[]
   providers: Array<ProviderAccountProjection>
   snapshots?: Map<string, SnapshotPoint[]>
   storedHistory?: Map<string, ProjectedHistoryPoint[]>
+  dynamicSubscriptions?: Map<string, DynamicSubscription[]>
   now: string
 }
 
@@ -203,7 +209,67 @@ export function projectProviderMetrics(input: ProjectProviderMetricsInput): Proj
       })
     }
   }
+  // --- dynamic subscriptions ---
+  for (const providerId of input.dynamicProviderIds ?? []) {
+    const providerAccount = input.config.providers.get(providerId)
+    if (!providerAccount) continue
+    const providerType = providerAccount.type
+    const providerProjection = input.providers.find((p) => p.providerAccountId === providerId)
+    const dynamicSubs = input.dynamicSubscriptions?.get(providerId) ?? []
+
+    for (const dynSub of dynamicSubs) {
+      for (const providerMetricId of dynSub.providerMetricIds) {
+        const matchedMetric = providerProjection?.metrics.find(
+          (m) => m.providerMetricId === providerMetricId,
+        )
+        if (!matchedMetric) continue
+
+        const metricKey = buildMetricKey(providerId, dynSub.id, providerMetricId)
+        const syntheticConfig = synthesizeMetricConfig(matchedMetric, providerMetricId)
+        result.push({
+          subscriptionId: dynSub.id,
+          subscriptionName: dynSub.name,
+          ...(dynSub.ui ? { subscriptionUi: dynSub.ui } : {}),
+          metricId: providerMetricId,
+          metricKey,
+          providerAccountId: providerId,
+          providerType,
+          providerMetricId,
+          config: syntheticConfig,
+          providerMetric: matchedMetric,
+          cache: providerProjection?.cache,
+          resolvedUsageFilter: {},
+          normalizedUsageFilter: "",
+          projectedHistory: [],
+          snapshots: input.snapshots?.get(metricKey) ?? [],
+          dynamic: true,
+        })
+      }
+    }
+  }
   return result
+}
+
+function synthesizeMetricConfig(m: NormalizedMetric, providerMetricId: string): MetricConfig {
+  const config: MetricConfig = {
+    id: providerMetricId,
+    providerMetricId,
+    label: m.label,
+    unit: m.unit,
+    sourceValueKind: m.sourceValueKind,
+    display: { module: inferDisplayModule(m) },
+  }
+  if (m.notes !== undefined) config.notes = m.notes
+  if (m.window !== undefined) config.window = m.window
+  return config
+}
+
+function inferDisplayModule(m: NormalizedMetric): DisplayModule {
+  if (m.suggestedDisplayModule !== undefined) return m.suggestedDisplayModule
+  if (m.sourceValueKind === "status") return "manual-status-card"
+  if (m.window?.kind === "rolling") return "rolling-window-card"
+  if (m.window?.kind === "calendar" || m.window?.kind === "fixed") return "period-quota-card"
+  return "balance-card"
 }
 
 function mergeHistoryPoints(a: ProjectedHistoryPoint[], b: ProjectedHistoryPoint[]): ProjectedHistoryPoint[] {
@@ -225,14 +291,20 @@ export function buildDashboardPayload(input: DashboardProjectionInput): Dashboar
   const projected = projectProviderMetrics({
     config: input.config,
     subscriptionIds: profile.subscriptionIds,
+    ...(profile.dynamicProviderIds ? { dynamicProviderIds: profile.dynamicProviderIds } : {}),
     providers: input.providers,
     now: input.generatedAt,
     ...(input.snapshots !== undefined ? { snapshots: input.snapshots } : {}),
     ...(input.storedHistory !== undefined ? { storedHistory: input.storedHistory } : {}),
+    ...(input.dynamicSubscriptions !== undefined ? { dynamicSubscriptions: input.dynamicSubscriptions } : {}),
   })
 
   const subscriptions = buildSubscriptions(projected, input.generatedAt, selectedRange)
-  const summaryGroups = buildSummaryGroups(projected, selectedRange, input.generatedAt)
+  const summaryGroups = buildSummaryGroups(
+    projected.filter((p) => !p.dynamic),
+    selectedRange,
+    input.generatedAt,
+  )
 
   return {
     profile: { id: profile.id, name: profile.name },

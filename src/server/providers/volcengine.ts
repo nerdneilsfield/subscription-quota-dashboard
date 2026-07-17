@@ -106,7 +106,7 @@ async function callOpenApi(
     if (isAuthErrorCode(errInfo.code)) {
       return { error: { message: `Volcengine ${action} auth/signature error (${errInfo.code}): ${errInfo.message}`, retryable: false } }
     }
-    return { error: { message: `Volcengine ${action} API error (${errInfo.code}): ${errInfo.message}`, retryable: true } }
+    return { error: { message: `Volcengine ${action} API error (${errInfo.code}): ${errInfo.message}`, retryable: false } }
   }
 
   return { body: body as Record<string, unknown> }
@@ -170,12 +170,18 @@ function makeAfpMetric(
     unit: cfg?.unit ?? "tokens",
     limit: quota,
     used,
-    remaining: quota - used,
+    remaining: Math.max(0, quota - used),
     sourceValueKind: "gauge-used",
     sourceConfidence: "known",
-    ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration: providerMetricId.includes("five_hour") ? "5h" : providerMetricId.includes("weekly") ? "7d" : "30d", resetAt } } : {}),
+    ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration: durationForAfpWindow(providerMetricId), resetAt } } : {}),
   }
   return metric
+}
+
+function durationForAfpWindow(providerMetricId: string): string {
+  if (providerMetricId.includes("five_hour")) return "5h"
+  if (providerMetricId.includes("weekly")) return "7d"
+  return "30d"
 }
 
 function parseCodingPlanTiers(body: Record<string, unknown>, configs: MetricConfig[]): NormalizedMetric[] {

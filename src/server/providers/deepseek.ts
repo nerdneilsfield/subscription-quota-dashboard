@@ -59,14 +59,29 @@ function mapBalance(
 ): NormalizedMetric[] {
   const infos = body.balance_infos ?? []
   const result: NormalizedMetric[] = []
+  // When multiple currencies are present, use currency-suffixed providerMetricId
+  // (e.g. "balance:CNY") so they can be distinguished downstream. When only one
+  // entry exists (the common case), use plain "balance".
+  const useCurrencySuffix = infos.length > 1
   for (const info of infos) {
     const remaining = parseNumber(info.total_balance)
     if (remaining === undefined) continue
-    const cfg = metrics.find((m) => m.providerMetricId === BALANCE_METRIC_ID) ?? metrics[0]
+    const currency = info.currency ?? ""
+    const providerMetricId = useCurrencySuffix && currency !== ""
+      ? `${BALANCE_METRIC_ID}:${currency}`
+      : BALANCE_METRIC_ID
+    // Try exact providerMetricId match first, then plain "balance" fallback
+    const exactCfg = metrics.find((m) => m.providerMetricId === providerMetricId)
+    const fallbackCfg = !exactCfg ? metrics.find((m) => m.providerMetricId === BALANCE_METRIC_ID) ?? metrics[0] : undefined
+    const cfg = exactCfg ?? fallbackCfg
+    // When using a fallback config (no exact match) for a currency-suffixed metric,
+    // prefer the currency code as unit rather than the fallback config's unit.
+    const fallbackUnit = currency !== "" ? currency : "CNY"
+    const unit = exactCfg ? (cfg?.unit ?? fallbackUnit) : fallbackUnit
     const metric: NormalizedMetric = {
-      providerMetricId: BALANCE_METRIC_ID,
+      providerMetricId,
       label: cfg?.label ?? "Balance",
-      unit: cfg?.unit ?? "CNY",
+      unit,
       remaining,
       sourceValueKind: "gauge-remaining",
       sourceConfidence: "known",

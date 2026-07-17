@@ -46,7 +46,10 @@ export function createNovitaProvider(fetchImpl: typeof fetch = fetch): ProviderA
         return { ...base, errors: [{ message: "Novita balance request network error", retryable: true }] }
       }
 
-      const raw = parseNumber(body.availableBalance) ?? 0
+      const raw = parseNumber(body.availableBalance)
+      if (raw === undefined) {
+        return { ...base, errors: [{ message: "Novita response missing 'availableBalance' field", retryable: false }] }
+      }
       const remaining = raw / NOVITA_UNIT_DIVISOR
       const metric = mapBalance(remaining, input.metrics)
       return { ...base, metrics: metric ? [metric] : [] }

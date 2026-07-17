@@ -42,11 +42,11 @@ test("openrouter computes remaining = total_credits - total_usage", async () => 
   expect(m.sourceValueKind).toBe("gauge-remaining")
 })
 
-test("openrouter notes no credits when remaining <= 0", async () => {
+test("openrouter notes no credits when remaining <= 0 (clamped to 0)", async () => {
   const raw = async (): Promise<Response> =>
     makeResp(200, { data: { total_credits: 10, total_usage: 15 } })
   const result = await createOpenrouterProvider(raw as unknown as FakeFetch).refresh(buildInput())
-  expect(result.metrics[0]!.remaining).toBe(-5)
+  expect(result.metrics[0]!.remaining).toBe(0)
   expect(result.metrics[0]!.notes).toContain("No credits remaining")
 })
 

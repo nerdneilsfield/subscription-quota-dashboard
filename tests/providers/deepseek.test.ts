@@ -53,7 +53,7 @@ test("deepseek parses balance_infos[0].total_balance", async () => {
   expect(result.errors).toBeUndefined()
 })
 
-test("deepseek emits all balance_infos entries", async () => {
+test("deepseek emits all balance_infos entries with distinct providerMetricId", async () => {
   const raw = async (): Promise<Response> =>
     makeResp(200, {
       is_available: true,
@@ -64,8 +64,23 @@ test("deepseek emits all balance_infos entries", async () => {
     })
   const result = await createDeepseekProvider(raw as unknown as FakeFetch).refresh(buildInput())
   expect(result.metrics).toHaveLength(2)
+  expect(result.metrics[0]!.providerMetricId).toBe("balance:CNY")
   expect(result.metrics[0]!.remaining).toBe(42.5)
+  expect(result.metrics[0]!.unit).toBe("CNY")
+  expect(result.metrics[1]!.providerMetricId).toBe("balance:USD")
   expect(result.metrics[1]!.remaining).toBe(10)
+  expect(result.metrics[1]!.unit).toBe("USD")
+})
+
+test("deepseek single entry uses plain balance providerMetricId (no currency suffix)", async () => {
+  const raw = async (): Promise<Response> =>
+    makeResp(200, {
+      is_available: true,
+      balance_infos: [{ currency: "CNY", total_balance: 42.5 }],
+    })
+  const result = await createDeepseekProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.metrics).toHaveLength(1)
+  expect(result.metrics[0]!.providerMetricId).toBe("balance")
 })
 
 test("deepseek handles numeric string total_balance", async () => {

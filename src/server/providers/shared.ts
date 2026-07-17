@@ -31,7 +31,10 @@ export function authError(message: string): ProviderError {
 /// milliseconds. Mirrors cc-switch's `extract_reset_time`
 /// (coding_plan.rs:64-78). Zero/negative -> undefined (no reset).
 export function parseResetTime(value: unknown): string | undefined {
-  if (typeof value === "string") return value
+  if (typeof value === "string") {
+    // Validate parseable date; return undefined for garbage strings
+    return Number.isNaN(Date.parse(value)) ? undefined : value
+  }
   if (typeof value === "number") {
     if (value <= 0) return undefined
     // < 1e12 -> seconds; >= 1e12 -> milliseconds

@@ -78,8 +78,8 @@ function isLoopbackOrPrivateHost(host: string): boolean {
     const v4 = hostname.slice(7)
     return isLoopbackOrPrivateHost(v4)
   }
-  // IPv6 ULA (fc00::/7) and link-local (fe80::/10)
-  if (hostname.startsWith("fc") || hostname.startsWith("fd") || hostname.startsWith("fe80")) return true
+  // IPv6 ULA (fc00::/7) and link-local (fe80::/10) - only for actual IPv6 addresses (contain ":")
+  if (hostname.includes(":") && (hostname.startsWith("fc") || hostname.startsWith("fd") || hostname.startsWith("fe80"))) return true
   // IPv4 loopback / private / CGNAT
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(hostname)
   if (m) {
@@ -110,6 +110,11 @@ function validateBaseUrl(baseUrl: string | undefined, providerType: string, path
   if (allowlist !== undefined && !allowlist.includes(host)) {
     fail(path, `baseUrl host "${host}" not in allowlist for ${providerType}: ${allowlist.join(", ")}`)
   }
+  // zenmux has no hostname allowlist (user-supplied private deployments).
+  // SSRF defense relies on isLoopbackOrPrivateHost string check at config-load
+  // time. DNS rebinding (TOCTOU between config-load and request) is an
+  // accepted risk documented in the spec: zenmux baseUrl is user-controlled
+  // and pinned at deploy time.
 }
 
 function fail(path: string, message: string): never {
@@ -197,9 +202,6 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
         validateBaseUrl(provider.baseUrl, provider.type, `${providerPath}.baseUrl`)
       }
       // zenmux requires baseUrl
-      if (provider.type === "zenmux" && !("baseUrl" in provider) ) {
-        fail(`${providerPath}.baseUrl`, "zenmux requires baseUrl")
-      }
       if (provider.type === "zenmux" && provider.baseUrl === undefined) {
         fail(`${providerPath}.baseUrl`, "zenmux requires baseUrl")
       }

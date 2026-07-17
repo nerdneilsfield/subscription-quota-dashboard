@@ -26,7 +26,7 @@ function makeResp(status: number, body: unknown): Response {
 // plain async fake through `unknown` to satisfy `typeof fetch`.
 type FakeFetch = typeof fetch
 
-test("zenmux multiplies usage_percentage by 100", async () => {
+test("zenmux derives used/limit from USD values (usage_percentage ignored)", async () => {
   const calls: string[] = []
   const raw = async (input: RequestInfo | URL): Promise<Response> => {
     calls.push(String(input))

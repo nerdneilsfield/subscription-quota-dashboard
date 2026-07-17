@@ -99,7 +99,12 @@ function parseTiers(
     if (type.toUpperCase() !== "TOKENS_LIMIT") continue
     const percentage = parseNumber(item.percentage) ?? 0
     const resetAt = parseResetTime(item.nextResetTime)
-    const resetMs = typeof item.nextResetTime === "number" ? item.nextResetTime : undefined
+    // Compute resetMs for fallback sorting: handle both numeric (sec/ms) and ISO strings
+    const resetMs = typeof item.nextResetTime === "number"
+      ? item.nextResetTime
+      : typeof item.nextResetTime === "string"
+        ? Date.parse(item.nextResetTime)
+        : undefined
     const window = classifyWindow(item.unit)
     if (window === "five_hour" && !fiveHour) {
       fiveHour = { percentage, resetAt }

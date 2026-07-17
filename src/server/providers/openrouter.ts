@@ -56,7 +56,8 @@ export function createOpenrouterProvider(fetchImpl: typeof fetch = fetch): Provi
 }
 
 function mapBalance(totalCredits: number, totalUsage: number, metrics: MetricConfig[]): NormalizedMetric | undefined {
-  const remaining = totalCredits - totalUsage
+  const rawRemaining = totalCredits - totalUsage
+  const remaining = Math.max(0, rawRemaining)
   const cfg = metrics.find((m) => m.providerMetricId === BALANCE_METRIC_ID) ?? metrics[0]
   const metric: NormalizedMetric = {
     providerMetricId: BALANCE_METRIC_ID,

@@ -127,13 +127,13 @@ test("volcengine auth error via ResponseMetadata.Error code", async () => {
   expect(result.errors![0]!.message).toContain("signature")
 })
 
-test("volcengine non-auth API error retryable", async () => {
+test("volcengine non-auth API error non-retryable (business envelope)", async () => {
   const raw = async (): Promise<Response> =>
     makeResp(200, {
       ResponseMetadata: { Error: { Code: "InternalError", Message: "oops" } },
     })
   const result = await createVolcengineProvider(raw as unknown as FakeFetch).refresh(buildInput())
-  expect(result.errors![0]!.retryable).toBe(true)
+  expect(result.errors![0]!.retryable).toBe(false)
 })
 
 test("volcengine 500 retryable", async () => {

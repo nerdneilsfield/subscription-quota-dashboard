@@ -64,7 +64,10 @@ export function createMiniMaxProvider(fetchImpl: typeof fetch = fetch): Provider
 
       // Business error envelope
       const baseResp = body.base_resp
-      if (baseResp && baseResp.status_code !== undefined && baseResp.status_code !== 0) {
+      if (!baseResp || baseResp.status_code === undefined) {
+        return { ...base, errors: [{ message: "MiniMax response missing base_resp envelope", retryable: false }] }
+      }
+      if (baseResp.status_code !== 0) {
         const msg = baseResp.status_msg ?? "Unknown error"
         return { ...base, errors: [{ message: `MiniMax API error (code ${baseResp.status_code}): ${msg}`, retryable: false }] }
       }
@@ -103,7 +106,7 @@ function makeMetric(
     unit: cfg?.unit ?? "%",
     limit: 100,
     remaining: remainingPercent,
-    used: 100 - remainingPercent,
+    used: Math.max(0, 100 - remainingPercent),
     sourceValueKind: "gauge-remaining",
     sourceConfidence: "known",
     ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration: providerMetricId === "five_hour" ? "5h" : "7d", resetAt } } : {}),

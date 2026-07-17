@@ -65,7 +65,13 @@ function mapBalance(data: { totalBalance?: unknown }, baseUrl: string, metrics: 
   if (remaining === undefined) return undefined
   const cfg = metrics.find((m) => m.providerMetricId === BALANCE_METRIC_ID) ?? metrics[0]
   // Auto-derive unit from host: .cn -> CNY, .com -> USD (matches cc-switch balance.rs:260)
-  const defaultUnit = baseUrl.includes("api.siliconflow.cn") ? "CNY" : "USD"
+  let defaultUnit = "USD"
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase()
+    defaultUnit = host === "api.siliconflow.cn" ? "CNY" : "USD"
+  } catch {
+    // Fall through with USD default
+  }
   return {
     providerMetricId: BALANCE_METRIC_ID,
     label: cfg?.label ?? "Balance",

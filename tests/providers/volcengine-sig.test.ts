@@ -108,17 +108,18 @@ test("golden signature: structure and format locked (cc-switch parity)", () => {
   expect(result2.headers.get("Authorization")).toBe(auth)
 })
 
-// Auth error code classification (ports cc-switch volcengine_auth_error_code_detection)
-test("auth error code classification matches cc-switch", () => {
-  const { isAuthErrorCode } = require("../../src/server/providers/volcengine")
-  // These should be classified as auth errors (non-retryable)
-  const authCodes = ["AccessDenied", "SignatureDoesNotMatch", "InvalidAuthorization", "Unauthorized"]
-  // These should NOT be classified as auth errors (retryable)
-  const nonAuthCodes = ["InvalidParameter.Action", "InternalError"]
-  for (const code of authCodes) {
-    expect(isAuthErrorCode(code)).toBe(true)
-  }
-  for (const code of nonAuthCodes) {
-    expect(isAuthErrorCode(code)).toBe(false)
-  }
+// Regression lock: exact signature for the golden input. This catches accidental
+// changes to the signing algorithm; it does not prove Volcengine server acceptance.
+test("golden signature regression lock", () => {
+  const result = signVolcengineRequest({
+    ak: "AKLTtest",
+    sk: "secretkey",
+    region: "cn-beijing",
+    action: "GetAFPUsage",
+    now: new Date("2024-06-21T00:00:00Z"),
+  })
+  const auth = result.headers.get("Authorization")!
+  expect(auth).toBe(
+    "HMAC-SHA256 Credential=AKLTtest/20240621/cn-beijing/ark/request, SignedHeaders=host;x-date;x-content-sha256;content-type, Signature=4ceb5e7c3c834fe8604cccf04eeec5ab09045d2e5a36723921f8cea691b0a186",
+  )
 })

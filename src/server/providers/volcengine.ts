@@ -52,6 +52,8 @@ export function createVolcengineProvider(fetchImpl: typeof fetch = fetch): Provi
       // AFP soft/transient error -> collect and try CodingPlan as fallback
       // (matches cc-switch: Soft errors are accumulated, not fatal)
       const afpError = "error" in afpResult ? afpResult.error : undefined
+      // Auth failures are fatal; don't waste a CodingPlan call with bad credentials.
+      if (afpError && !afpError.retryable) return { ...base, errors: [afpError] }
 
       // 2) Fallback: GetCodingPlanUsage
       const cpResult = await callOpenApi(fetchImpl, ak, sk, region, "GetCodingPlanUsage", now)
@@ -65,8 +67,7 @@ export function createVolcengineProvider(fetchImpl: typeof fetch = fetch): Provi
 
       // Both calls failed or returned empty
       const cpError = "error" in cpResult ? cpResult.error : undefined
-      // Auth errors from either call are fatal (non-retryable)
-      if (afpError && !afpError.retryable) return { ...base, errors: [afpError] }
+      // Auth errors from CodingPlan are fatal (non-retryable)
       if (cpError && !cpError.retryable) return { ...base, errors: [cpError] }
       // Prefer the first error if both are retryable; otherwise report both empty
       if (afpError) return { ...base, errors: [afpError] }
@@ -141,7 +142,7 @@ function extractError(body: unknown): { code: string; message: string } | undefi
   return { code, message }
 }
 
-export function isAuthErrorCode(code: string): boolean {
+function isAuthErrorCode(code: string): boolean {
   const lower = code.toLowerCase()
   return AUTH_ERROR_KEYWORDS.some((kw) => lower.includes(kw))
 }

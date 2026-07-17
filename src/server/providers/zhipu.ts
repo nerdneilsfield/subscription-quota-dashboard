@@ -101,12 +101,9 @@ function parseTiers(
     const rawPercentage = parseNumber(item.percentage) ?? 0
     const percentage = rawPercentage <= 1 ? rawPercentage * 100 : rawPercentage
     const resetAt = parseResetTime(item.nextResetTime)
-    // Compute resetMs for fallback sorting: handle both numeric (sec/ms) and ISO strings
-    const resetMs = typeof item.nextResetTime === "number"
-      ? item.nextResetTime
-      : typeof item.nextResetTime === "string"
-        ? Date.parse(item.nextResetTime)
-        : undefined
+    // Compute resetMs for fallback sorting from the parsed resetAt so numeric
+    // seconds are normalized consistently with parseResetTime.
+    const resetMs = resetAt !== undefined ? Date.parse(resetAt) : undefined
     const window = classifyWindow(item.unit)
     if (window === "five_hour" && !fiveHour) {
       fiveHour = { percentage, resetAt }

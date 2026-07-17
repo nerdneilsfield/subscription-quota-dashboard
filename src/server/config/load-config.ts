@@ -70,45 +70,79 @@ function resolveAkSkCredential(
   return { reason: ak.reason ?? sk.reason ?? "missing AK or SK" }
 }
 
+function isPrivateIPv4(a: number, b: number, c: number, d: number): boolean {
+  if (a === 127) return true // loopback
+  if (a === 10) return true // private 10/8
+  if (a === 172 && b >= 16 && b <= 31) return true // private 172.16/12
+  if (a === 192 && b === 168) return true // private 192.168/16
+  if (a === 169 && b === 254) return true // link-local 169.254/16
+  if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64/10
+  return false
+}
+
+function expandIPv6(h: string): number[] | undefined {
+  if (h === "::") return [0, 0, 0, 0, 0, 0, 0, 0]
+  if (!h.includes("::")) {
+    const parts = h.split(":")
+    if (parts.length !== 8) return undefined
+    const nums = parts.map((p) => parseInt(p, 16))
+    if (nums.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return undefined
+    return nums
+  }
+  const [left, right] = h.split("::", 2)
+  const leftParts = left === "" ? [] : left.split(":")
+  const rightParts = right === "" ? [] : right.split(":")
+  const zeroCount = 8 - leftParts.length - rightParts.length
+  if (zeroCount < 0) return undefined
+  const allParts = [...leftParts, ...Array(zeroCount).fill("0"), ...rightParts]
+  const nums = allParts.map((p) => parseInt(p, 16))
+  if (nums.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return undefined
+  return nums
+}
+
 function isLoopbackOrPrivateHost(hostname: string): boolean {
-  // URL.hostname already strips the port and returns IPv6 WITHOUT brackets
-  // (e.g. "::1", "fe80::1"). But some runtimes may include brackets; strip them.
+  // Bun/Node URL.hostname strips the port but may return IPv6 literals WITH brackets.
   const h = hostname.toLowerCase().replace(/^\[|]$/g, "")
   if (h === "localhost") return true
 
   // IPv4 literal (dotted quad)
   const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
   if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])]
-    if (a === 127) return true // loopback
-    if (a === 10) return true // private 10/8
-    if (a === 172 && b >= 16 && b <= 31) return true // private 172.16/12
-    if (a === 192 && b === 168) return true // private 192.168/16
-    if (a === 169 && b === 254) return true // link-local 169.254/16
-    if (a === 100 && b >= 64 && b <= 127) return true // CGNAT 100.64/10
-    return false
+    const [a, b, c, d] = [Number(v4[1]), Number(v4[2]), Number(v4[3]), Number(v4[4])]
+    if ([a, b, c, d].some((n) => n > 255)) return false
+    return isPrivateIPv4(a, b, c, d)
   }
 
-  // IPv6 - must contain ":"
   if (!h.includes(":")) return false
 
-  // ::1 loopback
-  if (h === "::1") return true
-  // ::ffff:127.0.0.1 etc (IPv4-mapped IPv6)
-  const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h)
-  if (mapped) return isLoopbackOrPrivateHost(mapped[1]!)
-  // ::ffff:0:127.0.0.1 hex variant
-  const mappedHex = /^::ffff:0*7f00:0{0,4}1$/.exec(h)
-  if (mappedHex) return true
+  const groups = expandIPv6(h)
+  if (groups === undefined) return false
 
-  // ULA fc00::/7 (fc or fd prefix)
-  if (h.startsWith("fc") || h.startsWith("fd")) return true
-  // Link-local fe80::/10 (fe80, fe90, fea0, feb0)
-  if (h.startsWith("fe8") || h.startsWith("fe9") || h.startsWith("fea") || h.startsWith("feb")) return true
-  // Multicast ff00::/8 - not private but should be rejected for SSRF
-  if (h.startsWith("ff")) return true
   // Unspecified ::
-  if (h === "::") return true
+  if (groups.every((n) => n === 0)) return true
+  // ::1 loopback
+  if (groups[0] === 0 && groups.slice(1, 7).every((n) => n === 0) && groups[7] === 1) return true
+
+  // IPv4-mapped (::ffff/96) or IPv4-compatible (::/96) addresses carry an IPv4
+  // address in the low 32 bits. The URL parser normalizes these to hex form,
+  // so prefix matching alone is not enough.
+  const isMapped = groups.slice(0, 5).every((n) => n === 0) && groups[5] === 0xffff
+  const isCompatible = groups.slice(0, 6).every((n) => n === 0)
+  if (isMapped || isCompatible) {
+    const ipv4 = ((groups[6]! << 16) | groups[7]!) >>> 0
+    const a = (ipv4 >>> 24) & 0xff
+    const b = (ipv4 >>> 16) & 0xff
+    const c = (ipv4 >>> 8) & 0xff
+    const d = ipv4 & 0xff
+    return isPrivateIPv4(a, b, c, d)
+  }
+
+  // ULA fc00::/7
+  if ((groups[0] & 0xfe00) === 0xfc00) return true
+  // Link-local fe80::/10
+  if ((groups[0] & 0xffc0) === 0xfe80) return true
+  // Multicast ff00::/8
+  if ((groups[0] & 0xff00) === 0xff00) return true
 
   return false
 }

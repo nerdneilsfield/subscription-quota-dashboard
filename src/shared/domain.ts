@@ -53,6 +53,7 @@ export type ProviderAccountConfig =
   | { id: string; type: "minimax"; baseUrl?: string | undefined; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
   | { id: string; type: "zenmux"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
   | { id: string; type: "volcengine"; region?: string | undefined; akEnv?: string | undefined; ak?: string | undefined; skEnv?: string | undefined; sk?: string | undefined }
+  | { id: string; type: "cliproxy"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined; queryProviders?: string[] | undefined }
 
 export type SubscriptionConfig = {
   id: string
@@ -62,7 +63,7 @@ export type SubscriptionConfig = {
   ui?: { color?: string; group?: string; sort?: number }
 }
 
-export type ProfileConfig = { id: string; name: string; viewKey: string | undefined; subscriptionIds: string[] }
+export type ProfileConfig = { id: string; name: string; viewKey: string | undefined; subscriptionIds: string[]; dynamicProviderIds?: string[] }
 export type DashboardConfigInput = { providers: ProviderAccountConfig[]; subscriptions: SubscriptionConfig[]; profiles: ProfileConfig[] }
 export type ProviderRuntimeState = {
   available: boolean
@@ -70,5 +71,11 @@ export type ProviderRuntimeState = {
   ak?: string
   sk?: string
   reason?: string
+}
+export type DynamicSubscription = {
+  id: string
+  name: string
+  providerMetricIds: string[]
+  ui?: { color?: string; group?: string; sort?: number }
 }
 export type NormalizedConfig = { providers: Map<string, ProviderAccountConfig>; providerRuntime: Map<string, ProviderRuntimeState>; subscriptions: Map<string, SubscriptionConfig>; profiles: Map<string, ProfileConfig> }

@@ -1,5 +1,6 @@
 import type {
   DisplayModule,
+  DynamicSubscription,
   LimitWindow,
   MetricConfig,
   ProviderAccountConfig,
@@ -54,6 +55,7 @@ export type ProviderRefreshResult = {
   historyEvents?: ProviderHistoryEvent[]
   nextImportState?: { maxCreationTime?: number; importedQueryIdsAtMaxCreationTime: string[] }
   errors?: Array<{ message: string; retryable: boolean }>
+  dynamicSubscriptions?: DynamicSubscription[]
 }
 
 export type ProviderAdapter = {

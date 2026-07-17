@@ -47,6 +47,7 @@ export function signVolcengineRequest(input: {
   const authorization = `HMAC-SHA256 Credential=${ak}/${credentialScope}, SignedHeaders=${VOLCENGINE_SIGNED_HEADERS}, Signature=${signature}`
   const url = `https://${VOLCENGINE_OPENAPI_HOST}/?${canonicalQuery}`
   const headers = new Headers()
+  headers.set("Host", VOLCENGINE_OPENAPI_HOST)
   headers.set("X-Date", xDate)
   headers.set("X-Content-Sha256", EMPTY_BODY_SHA256)
   headers.set("Content-Type", VOLCENGINE_CONTENT_TYPE)
@@ -93,11 +94,11 @@ function sha256Hex(data: string): string {
 }
 
 function hmacSha256(key: string, data: string): Uint8Array {
-  return Uint8Array.from(createHmac("sha256", key).update(data).digest())
+  return hmacSha256Bytes(new TextEncoder().encode(key), data)
 }
 
 function hmacSha256Bytes(key: Uint8Array, data: string): Uint8Array {
-  return Uint8Array.from(createHmac("sha256", Buffer.from(key)).update(data).digest())
+  return Uint8Array.from(createHmac("sha256", key).update(data).digest())
 }
 
 function bytesToHex(bytes: Uint8Array): string {

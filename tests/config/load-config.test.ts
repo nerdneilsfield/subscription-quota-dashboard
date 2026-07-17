@@ -241,6 +241,47 @@ test("SSRF rejects CGNAT 100.64.0.1", () => {
   })).toThrow("loopback")
 })
 
+test("SSRF rejects IPv4-mapped IPv6 hex form [::ffff:a00:1] (10.0.0.1)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[::ffff:10.0.0.1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv4-mapped IPv6 hex form [::ffff:c0a8:101] (192.168.1.1)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[::ffff:192.168.1.1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv4-compatible IPv6 [::7f00:1] (127.0.0.1)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[::127.0.0.1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF rejects IPv4-compatible IPv6 [::a00:1] (10.0.0.1)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "http://[::10.0.0.1]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })).toThrow("loopback")
+})
+
+test("SSRF allows valid public IPv6", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "zm", type: "zenmux", baseUrl: "https://[2606:4700:4700::1111]", apiKey: "k" }],
+    subscriptions: [{ id: "zm-sub", name: "ZM", providerId: "zm", metrics: [{ id: "5h", label: "5h", unit: "USD", display: { module: "rolling-window-card" } }] }],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: ["zm-sub"] }],
+  })
+  expect(config.providerRuntime.get("zm")?.available).toBe(true)
+})
+
 test("SSRF does not false-positive on valid host starting with 'fc'", () => {
   const config = loadDashboardConfig({
     providers: [{ id: "zm", type: "zenmux", baseUrl: "https://fc-proxy.example.com", apiKey: "k" }],

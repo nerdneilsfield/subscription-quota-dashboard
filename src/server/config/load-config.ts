@@ -89,7 +89,7 @@ function expandIPv6(h: string): number[] | undefined {
     if (nums.some((n) => Number.isNaN(n) || n < 0 || n > 0xffff)) return undefined
     return nums
   }
-  const [left, right] = h.split("::", 2)
+  const [left = "", right = ""] = h.split("::", 2)
   const leftParts = left === "" ? [] : left.split(":")
   const rightParts = right === "" ? [] : right.split(":")
   const zeroCount = 8 - leftParts.length - rightParts.length
@@ -137,12 +137,13 @@ function isLoopbackOrPrivateHost(hostname: string): boolean {
     return isPrivateIPv4(a, b, c, d)
   }
 
+  const g0 = groups[0]!
   // ULA fc00::/7
-  if ((groups[0] & 0xfe00) === 0xfc00) return true
+  if ((g0 & 0xfe00) === 0xfc00) return true
   // Link-local fe80::/10
-  if ((groups[0] & 0xffc0) === 0xfe80) return true
+  if ((g0 & 0xffc0) === 0xfe80) return true
   // Multicast ff00::/8
-  if ((groups[0] & 0xff00) === 0xff00) return true
+  if ((g0 & 0xff00) === 0xff00) return true
 
   return false
 }

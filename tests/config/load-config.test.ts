@@ -290,3 +290,82 @@ test("SSRF does not false-positive on valid host starting with 'fc'", () => {
   })
   expect(config.providerRuntime.get("zm")?.available).toBe(true)
 })
+
+test("cliproxy requires baseUrl", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy" } as never],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).toThrow("baseUrl")
+})
+
+test("cliproxy accepts localhost baseUrl (SSRF loopback exemption)", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })
+  expect(config.providerRuntime.get("cp")?.available).toBe(true)
+  expect(config.providerRuntime.get("cp")?.apiKey).toBe("k")
+})
+
+test("cliproxy accepts 127.0.0.1 baseUrl", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://127.0.0.1:8317", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })
+  expect(config.providerRuntime.get("cp")?.available).toBe(true)
+})
+
+test("cliproxy rejects non-loopback private IP (SSRF)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://10.0.0.1:8317", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).toThrow("private")
+})
+
+test("cliproxy rejects :: (unspecified, not loopback)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://[::]:8317", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).toThrow("private")
+})
+
+test("cliproxy resolves apiKeyEnv", () => {
+  process.env.CLIPROXY_TEST_KEY = "mgmt-secret"
+  const config = loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKeyEnv: "CLIPROXY_TEST_KEY" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })
+  expect(config.providerRuntime.get("cp")?.apiKey).toBe("mgmt-secret")
+  delete process.env.CLIPROXY_TEST_KEY
+})
+
+test("dynamicProviderIds references unknown provider -> fail", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [], dynamicProviderIds: ["nonexistent"] }],
+  })).toThrow("nonexistent")
+})
+
+test("dynamicProviderIds references existing provider -> ok", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [], dynamicProviderIds: ["cp"] }],
+  })
+  expect(config.profiles.get("self")?.dynamicProviderIds).toEqual(["cp"])
+})
+
+test("cliproxy queryProviders validates known providers", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k", queryProviders: ["codix"] }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).toThrow("queryProviders")
+})

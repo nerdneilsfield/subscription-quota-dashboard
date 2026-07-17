@@ -171,6 +171,31 @@ function validateBaseUrl(baseUrl: string | undefined, providerType: string, path
   // and pinned at deploy time.
 }
 
+// cliproxy allows loopback baseUrls (CLIProxyAPI runs on the same host as
+// the dashboard). Private non-loopback addresses are still rejected to
+// prevent SSRF via internal services.
+function isLoopbackOnly(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|]$/g, "")
+  if (h === "localhost") return true
+  if (/^127\./.test(h)) return true
+  if (h === "::1") return true
+  // NOT :: (unspecified address -- should not be exempted)
+  return false
+}
+
+function validateBaseUrlSkipLoopback(baseUrl: string, path: string): void {
+  let parsed: URL
+  try {
+    parsed = new URL(baseUrl)
+  } catch {
+    fail(path, `baseUrl "${baseUrl}" is not a valid URL`)
+  }
+  const host = parsed.hostname.toLowerCase()
+  if (isLoopbackOrPrivateHost(host) && !isLoopbackOnly(host)) {
+    fail(path, `baseUrl host "${host}" is private (non-loopback)`)
+  }
+}
+
 function fail(path: string, message: string): never {
   throw new Error(`Invalid dashboard config: ${path}: ${message}`)
 }
@@ -249,6 +274,25 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
           ? { available: true, ak, sk }
           : { available: false, reason: reason ?? "missing AK or SK" }
       providers.set(provider.id, { ...provider, region })
+      providerRuntime.set(provider.id, state)
+    } else if (provider.type === "cliproxy") {
+      if (!provider.baseUrl || provider.baseUrl === "") {
+        fail(`${providerPath}.baseUrl`, "cliproxy requires baseUrl")
+      }
+      validateBaseUrlSkipLoopback(provider.baseUrl, `${providerPath}.baseUrl`)
+      if (provider.queryProviders !== undefined) {
+        const knownProviders = new Set(["codex", "claude", "xai"])
+        for (const qp of provider.queryProviders) {
+          if (!knownProviders.has(qp)) {
+            fail(`${providerPath}.queryProviders`, `unknown provider "${qp}"`)
+          }
+        }
+      }
+      const { apiKey, reason } = resolveBearerCredential(provider as { apiKeyEnv?: string | undefined; apiKey?: string | undefined })
+      const state: ProviderRuntimeState = { available: apiKey !== undefined }
+      if (apiKey !== undefined) state.apiKey = apiKey
+      if (reason !== undefined) state.reason = reason
+      providers.set(provider.id, provider)
       providerRuntime.set(provider.id, state)
     } else if (API_KEY_PROVIDER_TYPES.has(provider.type)) {
       // Validate baseUrl for providers that accept it
@@ -338,6 +382,14 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
         fail(
           `profiles[${profile.id}].subscriptionIds`,
           `references unknown subscription "${subscriptionId}"`,
+        )
+      }
+    }
+    for (const dynProviderId of profile.dynamicProviderIds ?? []) {
+      if (!providers.has(dynProviderId)) {
+        fail(
+          `profiles[${profile.id}].dynamicProviderIds`,
+          `references unknown provider "${dynProviderId}"`,
         )
       }
     }

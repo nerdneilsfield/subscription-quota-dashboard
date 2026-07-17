@@ -77,4 +77,8 @@ export const MIGRATIONS: Migration[] = [
       ")",
     ].join("\n"),
   },
+  {
+    version: 6,
+    sql: "ALTER TABLE provider_cache ADD COLUMN dynamic_subscriptions_json TEXT",
+  },
 ]

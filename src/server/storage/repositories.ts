@@ -1,4 +1,4 @@
-import type { SourceValueKind } from "../../shared/domain"
+import type { DynamicSubscription, SourceValueKind } from "../../shared/domain"
 import type { DashboardDatabase } from "./database"
 
 export type ProviderCacheRecord = {
@@ -8,6 +8,7 @@ export type ProviderCacheRecord = {
   status: "ok" | "stale" | "unavailable"
   normalized: { metrics: Array<Record<string, unknown>> }
   errors: Array<{ message: string; retryable: boolean }>
+  dynamicSubscriptions?: DynamicSubscription[]
 }
 
 export type SnapshotInsert = {
@@ -90,6 +91,7 @@ type ProviderCacheRow = {
   status: string
   normalized_json: string
   error_json: string | null
+  dynamic_subscriptions_json: string | null
 }
 
 type SnapshotRow = {
@@ -127,7 +129,7 @@ function fallbackEventId(event: ProjectedHistoryEvent): string {
 }
 
 function decodeProviderCache(row: ProviderCacheRow): ProviderCacheRecord {
-  return {
+  const record: ProviderCacheRecord = {
     providerAccountId: row.provider_account_id,
     fetchedAt: row.fetched_at,
     staleAfter: row.stale_after,
@@ -135,6 +137,10 @@ function decodeProviderCache(row: ProviderCacheRow): ProviderCacheRecord {
     normalized: JSON.parse(row.normalized_json) as ProviderCacheRecord["normalized"],
     errors: row.error_json ? (JSON.parse(row.error_json) as ProviderCacheRecord["errors"]) : [],
   }
+  if (row.dynamic_subscriptions_json !== null) {
+    record.dynamicSubscriptions = JSON.parse(row.dynamic_subscriptions_json) as DynamicSubscription[]
+  }
+  return record
 }
 
 function decodeSnapshot(row: SnapshotRow): SnapshotReadRow {
@@ -193,14 +199,15 @@ export function createRepositories(db: DashboardDatabase): DashboardStorage {
     upsert(record) {
       const sql = [
         "insert into provider_cache(",
-        "  provider_account_id, fetched_at, stale_after, status, normalized_json, error_json",
-        ") values (?, ?, ?, ?, ?, ?)",
+        "  provider_account_id, fetched_at, stale_after, status, normalized_json, error_json, dynamic_subscriptions_json",
+        ") values (?, ?, ?, ?, ?, ?, ?)",
         "on conflict(provider_account_id) do update set",
         "  fetched_at = excluded.fetched_at,",
         "  stale_after = excluded.stale_after,",
         "  status = excluded.status,",
         "  normalized_json = excluded.normalized_json,",
-        "  error_json = excluded.error_json",
+        "  error_json = excluded.error_json,",
+        "  dynamic_subscriptions_json = coalesce(excluded.dynamic_subscriptions_json, provider_cache.dynamic_subscriptions_json)",
       ].join("\n")
       db.query(sql).run(
         record.providerAccountId,
@@ -209,6 +216,7 @@ export function createRepositories(db: DashboardDatabase): DashboardStorage {
         record.status,
         JSON.stringify(record.normalized),
         record.errors.length > 0 ? JSON.stringify(record.errors) : null,
+        record.dynamicSubscriptions !== undefined ? JSON.stringify(record.dynamicSubscriptions) : null,
       )
     },
   }

@@ -7,6 +7,7 @@ import type {
   ProviderCacheRecord,
   SnapshotInsert,
 } from "../../src/server/storage/repositories"
+import type { DynamicSubscription } from "../../src/shared/domain"
 
 function makeDb() {
   const db = openDashboardDatabase(":memory:")
@@ -305,4 +306,73 @@ test("transaction commits when fn returns normally", () => {
     repo.providerCache.upsert(baseProvider)
   })
   expect(repo.providerCache.get("poe/main")).toBeDefined()
+})
+
+const dynSubs: DynamicSubscription[] = [
+  { id: "cliproxy:codex:abc123", name: "CLIProxy - Codex #1", providerMetricIds: ["codex:abc123:five_hour"], ui: { group: "CLIProxy" } },
+]
+
+test("providerCache round-trips dynamicSubscriptions", () => {
+  const repo = makeDb()
+  repo.providerCache.upsert({
+    ...baseProvider,
+    providerAccountId: "cp-1",
+    dynamicSubscriptions: dynSubs,
+  })
+  const got = repo.providerCache.get("cp-1")
+  expect(got?.dynamicSubscriptions).toEqual(dynSubs)
+})
+
+test("providerCache preserves dynamicSubscriptions when upsert omits them (coalesce)", () => {
+  const repo = makeDb()
+  repo.providerCache.upsert({
+    ...baseProvider,
+    providerAccountId: "cp-1",
+    dynamicSubscriptions: dynSubs,
+  })
+  repo.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-01-01T00:01:00Z",
+    staleAfter: "2026-01-01T00:06:00Z",
+    status: "stale",
+    normalized: { metrics: [] },
+    errors: [{ message: "failed", retryable: true }],
+  })
+  const got = repo.providerCache.get("cp-1")
+  expect(got?.dynamicSubscriptions).toEqual(dynSubs)
+  expect(got?.status).toBe("stale")
+})
+
+test("providerCache overwrites dynamicSubscriptions with empty array on success", () => {
+  const repo = makeDb()
+  repo.providerCache.upsert({
+    ...baseProvider,
+    providerAccountId: "cp-1",
+    dynamicSubscriptions: dynSubs,
+  })
+  repo.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-01-01T00:01:00Z",
+    staleAfter: "2026-01-01T00:06:00Z",
+    status: "ok",
+    normalized: { metrics: [] },
+    errors: [],
+    dynamicSubscriptions: [],
+  })
+  const got = repo.providerCache.get("cp-1")
+  expect(got?.dynamicSubscriptions).toEqual([])
+})
+
+test("providerCache null dynamic_subscriptions_json decodes as undefined", () => {
+  const repo = makeDb()
+  repo.providerCache.upsert({
+    providerAccountId: "cp-1",
+    fetchedAt: "2026-01-01T00:00:00Z",
+    staleAfter: "2026-01-01T00:05:00Z",
+    status: "ok",
+    normalized: { metrics: [] },
+    errors: [],
+  })
+  const got = repo.providerCache.get("cp-1")
+  expect(got?.dynamicSubscriptions).toBeUndefined()
 })

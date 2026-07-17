@@ -510,3 +510,224 @@ test("advancing the clock past the 15-min TTL after refresh marks metrics stale"
   const payload = svc.getPayload("self", "24h")
   expect(payload.subscriptions[0]!.metrics[0]!.status).toBe("stale")
 })
+
+// --- Test 11: dynamicProviderIds union: cliproxy adapter called alongside static ---
+
+test("collectVisibleProviderAccounts includes dynamic providers (cliproxy adapter is called for dynamicProviderIds)", async () => {
+  const calls: string[] = []
+  const poeAdapter: ProviderAdapter = {
+    type: "poe",
+    async refresh(input) {
+      calls.push(input.providerAccountId)
+      return okResult(input.providerAccountId, [balanceMetric(500)])
+    },
+  }
+  const cliproxyAdapter: ProviderAdapter = {
+    type: "cliproxy",
+    async refresh(input) {
+      calls.push(input.providerAccountId)
+      return okResult(input.providerAccountId, [], [], undefined)
+    },
+  }
+  const config = loadDashboardConfig({
+    providers: [
+      poeProvider("poe-main"),
+      { id: "cp-main", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+    ],
+    subscriptions: [{ id: "sub-main", name: "Main", providerId: "poe-main", metrics: [pointsMetric("points")] }],
+    profiles: [{ id: "self", name: "Self", viewKey: "k", subscriptionIds: ["sub-main"], dynamicProviderIds: ["cp-main"] }],
+  })
+  const { storage } = spyStorage(makeStorage())
+  const providers = new Map<string, ProviderAdapter>([
+    ["poe", poeAdapter],
+    ["cliproxy", cliproxyAdapter],
+    ["manual", { type: "manual", async refresh(i) { return okResult(i.providerAccountId, []) } }],
+  ])
+  const svc = createRefreshService({ config, storage, providers, now: fixedNow })
+
+  await svc.refreshProfile({ profileId: "self", ip: "1.1.1.1" })
+
+  // Both adapters must have been called: static poe-main AND dynamic cp-main.
+  expect(calls).toContain("poe-main")
+  expect(calls).toContain("cp-main")
+})
+
+// --- Test 12: dynamic subscriptions written as snapshots after refresh ---
+
+test("dynamic subscriptions returned by the adapter are written as snapshots", async () => {
+  const cliproxyAdapter: ProviderAdapter = {
+    type: "cliproxy",
+    async refresh(input) {
+      const r: ProviderRefreshResult = {
+        ...okResult(input.providerAccountId, [], [], undefined),
+        metrics: [
+          {
+            providerMetricId: "codex:limit",
+            label: "Codex Limit",
+            unit: "requests",
+            used: 100,
+            limit: 500,
+            sourceValueKind: "counter",
+            sourceConfidence: "known",
+          },
+        ],
+        dynamicSubscriptions: [
+          { id: "dyn-codex", name: "Codex", providerMetricIds: ["codex:limit"] },
+        ],
+      }
+      return r
+    },
+  }
+  const config = loadDashboardConfig({
+    providers: [
+      poeProvider("poe-main"),
+      { id: "cp-main", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+    ],
+    subscriptions: [{ id: "sub-main", name: "Main", providerId: "poe-main", metrics: [pointsMetric("points")] }],
+    profiles: [{ id: "self", name: "Self", viewKey: "k", subscriptionIds: ["sub-main"], dynamicProviderIds: ["cp-main"] }],
+  })
+  const spy = spyStorage(makeStorage())
+  const providers = new Map<string, ProviderAdapter>([
+    ["poe", { type: "poe", async refresh(i) { return okResult(i.providerAccountId, [balanceMetric(500)]) } }],
+    ["cliproxy", cliproxyAdapter],
+    ["manual", { type: "manual", async refresh(i) { return okResult(i.providerAccountId, []) } }],
+  ])
+  const svc = createRefreshService({ config, storage: spy.storage, providers, now: fixedNow })
+
+  await svc.refreshProfile({ profileId: "self", ip: "1.1.1.1" })
+
+  // Snapshot for the dynamic metric should be present.
+  const rows = spy.snapshotInserts.flat()
+  const dynKey = buildMetricKey("cp-main", "dyn-codex", "codex:limit")
+  const dynRows = rows.filter((r) => r.metricKey === dynKey)
+  expect(dynRows).toHaveLength(1)
+  expect(dynRows[0]!.used).toBe(100)
+  expect(dynRows[0]!.limit).toBe(500)
+  expect(dynRows[0]!.subscriptionId).toBe("dyn-codex")
+
+  // The cacheRecord for cp-main should carry dynamicSubscriptions.
+  const cpCache = spy.cacheUpserts.find((c) => c.providerAccountId === "cp-main")
+  expect(cpCache).toBeDefined()
+  expect(cpCache!.dynamicSubscriptions).toEqual([{ id: "dyn-codex", name: "Codex", providerMetricIds: ["codex:limit"] }])
+})
+
+// --- Test 13: buildPayloadFromStorage loads dynamic subscriptions + snapshots ---
+
+test("buildPayloadFromStorage loads dynamic subscriptions and their snapshots from storage", async () => {
+  const cliproxyAdapter: ProviderAdapter = {
+    type: "cliproxy",
+    async refresh(input) {
+      const r: ProviderRefreshResult = {
+        ...okResult(input.providerAccountId, [], [], undefined),
+        metrics: [
+          {
+            providerMetricId: "codex:limit",
+            label: "Codex Limit",
+            unit: "requests",
+            used: 100,
+            limit: 500,
+            sourceValueKind: "counter",
+            sourceConfidence: "known",
+          },
+        ],
+        dynamicSubscriptions: [
+          { id: "dyn-codex", name: "Codex", providerMetricIds: ["codex:limit"] },
+        ],
+      }
+      return r
+    },
+  }
+  const config = loadDashboardConfig({
+    providers: [
+      poeProvider("poe-main"),
+      { id: "cp-main", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+    ],
+    subscriptions: [{ id: "sub-main", name: "Main", providerId: "poe-main", metrics: [pointsMetric("points")] }],
+    profiles: [{ id: "self", name: "Self", viewKey: "k", subscriptionIds: ["sub-main"], dynamicProviderIds: ["cp-main"] }],
+  })
+  const { storage } = spyStorage(makeStorage())
+  const providers = new Map<string, ProviderAdapter>([
+    ["poe", { type: "poe", async refresh(i) { return okResult(i.providerAccountId, [balanceMetric(500)]) } }],
+    ["cliproxy", cliproxyAdapter],
+    ["manual", { type: "manual", async refresh(i) { return okResult(i.providerAccountId, []) } }],
+  ])
+  const svc = createRefreshService({ config, storage, providers, now: fixedNow })
+
+  await svc.refreshProfile({ profileId: "self", ip: "1.1.1.1" })
+
+  const payload = svc.getPayload("self", "24h")
+  const subIds = payload.subscriptions.map((s) => s.id)
+  expect(subIds).toContain("dyn-codex")
+  const dynSub = payload.subscriptions.find((s) => s.id === "dyn-codex")
+  expect(dynSub).toBeDefined()
+  const metric = dynSub!.metrics[0]
+  expect(metric).toBeDefined()
+  // The dynamic metric should carry used=100, limit=500 from the provider result.
+  expect(metric!.used).toBe(100)
+  expect(metric!.limit).toBe(500)
+})
+
+// --- Test 14: dynamicSubscriptions preserved on adapter failure (last-good via coalesce) ---
+
+test("dynamicSubscriptions preserved on adapter failure via coalesce (last-good)", async () => {
+  let callCount = 0
+  const cliproxyAdapter: ProviderAdapter = {
+    type: "cliproxy",
+    async refresh(input) {
+      callCount++
+      if (callCount === 1) {
+        // First refresh: return dynamicSubscriptions.
+        return {
+          ...okResult(input.providerAccountId, [], [], undefined),
+          metrics: [
+            {
+              providerMetricId: "codex:limit",
+              label: "Codex Limit",
+              unit: "requests",
+              used: 100,
+              limit: 500,
+              sourceValueKind: "counter",
+              sourceConfidence: "known",
+            },
+          ],
+          dynamicSubscriptions: [{ id: "dyn-codex", name: "Codex", providerMetricIds: ["codex:limit"] }],
+        }
+      }
+      // Second refresh: fail with an error, no dynamicSubscriptions.
+      return {
+        providerAccountId: input.providerAccountId,
+        fetchedAt: NOW_ISO,
+        staleAfter: STALE_AFTER_ISO,
+        metrics: [],
+        errors: [{ message: "upstream 502", retryable: true }],
+      }
+    },
+  }
+  const config = loadDashboardConfig({
+    providers: [
+      poeProvider("poe-main"),
+      { id: "cp-main", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+    ],
+    subscriptions: [{ id: "sub-main", name: "Main", providerId: "poe-main", metrics: [pointsMetric("points")] }],
+    profiles: [{ id: "self", name: "Self", viewKey: "k", subscriptionIds: ["sub-main"], dynamicProviderIds: ["cp-main"] }],
+  })
+  const base = makeStorage()
+  const providers = new Map<string, ProviderAdapter>([
+    ["poe", { type: "poe", async refresh(i) { return okResult(i.providerAccountId, [balanceMetric(500)]) } }],
+    ["cliproxy", cliproxyAdapter],
+    ["manual", { type: "manual", async refresh(i) { return okResult(i.providerAccountId, []) } }],
+  ])
+  const svc = createRefreshService({ config, storage: base, providers, now: fixedNow })
+
+  // First refresh: seeds dynamicSubscriptions.
+  await svc.refreshProfile({ profileId: "self", ip: "1.1.1.1" })
+  const cache1 = base.providerCache.get("cp-main")
+  expect(cache1?.dynamicSubscriptions).toEqual([{ id: "dyn-codex", name: "Codex", providerMetricIds: ["codex:limit"] }])
+
+  // Second refresh: adapter fails, dynamicSubscriptions omitted from result.
+  await svc.refreshProfile({ profileId: "self", ip: "1.1.1.1" })
+
+  // Coalesce must preserve the previous dynamicSubscriptions.
+  const cache2 = base.providerCache.get("cp-main")
+  expect(cache2?.dynamicSubscriptions).toEqual([{ id: "dyn-codex", name: "Codex", providerMetricIds: ["codex:limit"] }])
+})

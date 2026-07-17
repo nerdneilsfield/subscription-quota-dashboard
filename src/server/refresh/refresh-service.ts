@@ -15,7 +15,7 @@
 //   account consumes a rate-limit token keyed `ip:profileId:providerAccountId`;
 //   a joined singleflight does NOT consume a token.
 
-import type { NormalizedConfig, MetricConfig } from "../../shared/domain"
+import type { NormalizedConfig, MetricConfig, DynamicSubscription } from "../../shared/domain"
 import type { RangeKey } from "../../shared/domain"
 import type { DashboardPayload } from "../../shared/dashboard-payload"
 import type { DashboardStorage, ProjectedHistoryEvent, ProviderCacheRecord, SnapshotInsert } from "../storage/repositories"
@@ -118,6 +118,9 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     for (const subId of profile.subscriptionIds) {
       const sub = config.subscriptions.get(subId)
       if (sub) seen.add(sub.providerId)
+    }
+    for (const dynProviderId of profile.dynamicProviderIds ?? []) {
+      seen.add(dynProviderId)
     }
     return Array.from(seen)
   }
@@ -244,6 +247,33 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       }
     }
 
+    // Dynamic subscription snapshots: write a snapshot row for each metric
+    // declared under a DynamicSubscription returned by the adapter. History is
+    // not tracked for dynamic subscriptions (adapters produce none).
+    if (result.dynamicSubscriptions) {
+      for (const dynSub of result.dynamicSubscriptions) {
+        for (const providerMetricId of dynSub.providerMetricIds) {
+          const matched = result.metrics.find((m) => m.providerMetricId === providerMetricId)
+          if (!matched) continue
+          const metricKey = buildMetricKey(paId, dynSub.id, providerMetricId)
+          const snap: SnapshotInsert = {
+            providerAccountId: paId,
+            subscriptionId: dynSub.id,
+            metricId: providerMetricId,
+            metricKey,
+            timestamp: tsIso,
+            source: "provider",
+            sourceValueKind: matched.sourceValueKind,
+          }
+          if (matched.authoritativeValue !== undefined) snap.authoritativeValue = matched.authoritativeValue
+          if (matched.used !== undefined) snap.used = matched.used
+          if (matched.remaining !== undefined) snap.remaining = matched.remaining
+          if (matched.limit !== undefined) snap.limit = matched.limit
+          snapshotRows.push(snap)
+        }
+      }
+    }
+
     const cacheStatus: ProviderCacheRecord["status"] = "ok"
     const cacheRecord: ProviderCacheRecord = {
       providerAccountId: paId,
@@ -252,6 +282,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       status: cacheStatus,
       normalized: { metrics: result.metrics as Array<Record<string, unknown>> },
       errors: result.errors ?? [],
+      ...(result.dynamicSubscriptions !== undefined ? { dynamicSubscriptions: result.dynamicSubscriptions } : {}),
     }
 
     storage.transaction(() => {
@@ -396,6 +427,38 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       }
     }
 
+    // Dynamic subscriptions: load from cache (persisted by writeProviderResult)
+    // and read their snapshots. History is not tracked for dynamic subs --
+    // adapters produce none. This feeds projectProviderMetrics' dynamic branch
+    // (see src/server/dashboard/project.ts).
+    const dynamicSubscriptions = new Map<string, DynamicSubscription[]>()
+    for (const dynProviderId of profile.dynamicProviderIds ?? []) {
+      const cache = storage.providerCache.get(dynProviderId)
+      const dynSubs = cache?.dynamicSubscriptions ?? []
+      if (dynSubs.length > 0) {
+        dynamicSubscriptions.set(dynProviderId, dynSubs)
+      }
+      for (const dynSub of dynSubs) {
+        for (const providerMetricId of dynSub.providerMetricIds) {
+          const metricKey = buildMetricKey(dynProviderId, dynSub.id, providerMetricId)
+          const snapRows = storage.snapshots.listForMetric(metricKey, rangeStart, rangeEnd)
+          if (snapRows.length > 0) {
+            snapshots.set(
+              metricKey,
+              snapRows.map((s) => {
+                const p: SnapshotPoint = { timestamp: s.timestamp, sourceValueKind: s.sourceValueKind }
+                if (s.authoritativeValue !== undefined) p.authoritativeValue = s.authoritativeValue
+                if (s.used !== undefined) p.used = s.used
+                if (s.remaining !== undefined) p.remaining = s.remaining
+                if (s.limit !== undefined) p.limit = s.limit
+                return p
+              }),
+            )
+          }
+        }
+      }
+    }
+
     return buildDashboardPayload({
       config,
       profileId,
@@ -404,6 +467,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       providers: providerProjections,
       ...(storedHistory.size > 0 ? { storedHistory } : {}),
       ...(snapshots.size > 0 ? { snapshots } : {}),
+      ...(dynamicSubscriptions.size > 0 ? { dynamicSubscriptions } : {}),
     })
   }
 

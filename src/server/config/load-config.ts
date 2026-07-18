@@ -71,6 +71,7 @@ function resolveAkSkCredential(
 }
 
 function isPrivateIPv4(a: number, b: number, c: number, d: number): boolean {
+  if (a === 0) return true // 0.0.0.0/8 (unspecified + reserved)
   if (a === 127) return true // loopback
   if (a === 10) return true // private 10/8
   if (a === 172 && b >= 16 && b <= 31) return true // private 172.16/12
@@ -276,7 +277,7 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
       providers.set(provider.id, { ...provider, region })
       providerRuntime.set(provider.id, state)
     } else if (provider.type === "cliproxy") {
-      if (!provider.baseUrl || provider.baseUrl === "") {
+      if (!provider.baseUrl) {
         fail(`${providerPath}.baseUrl`, "cliproxy requires baseUrl")
       }
       validateBaseUrlSkipLoopback(provider.baseUrl, `${providerPath}.baseUrl`)
@@ -385,11 +386,26 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
         )
       }
     }
+    const seenDynIds = new Set<string>()
     for (const dynProviderId of profile.dynamicProviderIds ?? []) {
       if (!providers.has(dynProviderId)) {
         fail(
           `profiles[${profile.id}].dynamicProviderIds`,
           `references unknown provider "${dynProviderId}"`,
+        )
+      }
+      if (seenDynIds.has(dynProviderId)) {
+        fail(
+          `profiles[${profile.id}].dynamicProviderIds`,
+          `duplicate dynamicProviderId "${dynProviderId}"`,
+        )
+      }
+      seenDynIds.add(dynProviderId)
+      const referenced = providers.get(dynProviderId)
+      if (referenced !== undefined && referenced.type !== "cliproxy") {
+        fail(
+          `profiles[${profile.id}].dynamicProviderIds`,
+          `provider "${dynProviderId}" is not a cliproxy provider (only cliproxy supports dynamic discovery)`,
         )
       }
     }

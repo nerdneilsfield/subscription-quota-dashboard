@@ -58,24 +58,37 @@ function makeClaudeBody(): unknown {
   }
 }
 
-function makeXaiBody(): unknown {
+// Weekly (?format=credits) and monthly (no format) endpoints return distinct
+// payloads so tests can verify the adapter merges them correctly instead of
+// blindly using the same body for both calls.
+function makeXaiWeeklyBody(): unknown {
   return {
     status_code: 200,
     body: JSON.stringify({
       config: {
         credit_usage_percent: 30,
+        current_period: { type: "weekly", end: "2026-07-24T00:00:00Z" },
+      },
+    }),
+  }
+}
+
+function makeXaiMonthlyBody(): unknown {
+  return {
+    status_code: 200,
+    body: JSON.stringify({
+      config: {
         monthly_limit: { val: 1000 },
         used: { val: 200 },
         on_demand_cap: { val: 500 },
         on_demand_used: { val: 100 },
-        current_period: { type: "weekly", end: "2026-07-24T00:00:00Z" },
         billing_period_end: "2026-08-01T00:00:00Z",
       },
     }),
   }
 }
 
-function makeFakeFetch(codexBody = makeCodexBody(), claudeBody = makeClaudeBody(), xaiBody = makeXaiBody()) {
+function makeFakeFetch(codexBody = makeCodexBody(), claudeBody = makeClaudeBody(), _xaiBody?: unknown) {
   const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input)
     if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
@@ -83,7 +96,11 @@ function makeFakeFetch(codexBody = makeCodexBody(), claudeBody = makeClaudeBody(
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : {}
       if (body.auth_index === "abc123") return makeResp(200, codexBody)
       if (body.auth_index === "def456") return makeResp(200, claudeBody)
-      if (body.auth_index === "ghi789") return makeResp(200, xaiBody)
+      if (body.auth_index === "ghi789") {
+        // Differentiate by upstream URL: ?format=credits vs plain /billing
+        const isWeekly = body.url?.includes("format=credits")
+        return makeResp(200, isWeekly ? makeXaiWeeklyBody() : makeXaiMonthlyBody())
+      }
       return makeResp(200, { status_code: 500, body: "{}" })
     }
     return makeResp(404, {})
@@ -140,22 +157,43 @@ test("claude: utilization used directly (NOT x100)", async () => {
 
 test("xai: two endpoints merged, monthly percent not capped", async () => {
   // overage: used=1500, monthly_limit=1000 -> 150%
-  const xaiOverage = {
+  const xaiOverageWeekly = {
     status_code: 200,
     body: JSON.stringify({
       config: {
         credit_usage_percent: 80,
+        current_period: { type: "weekly", end: "2026-07-24T00:00:00Z" },
+      },
+    }),
+  }
+  const xaiOverageMonthly = {
+    status_code: 200,
+    body: JSON.stringify({
+      config: {
         monthly_limit: { val: 1000 },
         used: { val: 1500 },
         on_demand_cap: { val: 500 },
         on_demand_used: { val: 200 },
-        current_period: { type: "weekly", end: "2026-07-24T00:00:00Z" },
         billing_period_end: "2026-08-01T00:00:00Z",
       },
     }),
   }
-  const fetchImpl = makeFakeFetch(makeCodexBody(), makeClaudeBody(), xaiOverage)
-  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
+  const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
+    if (url.includes("/api-call")) {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {}
+      if (body.auth_index === "ghi789") {
+        const isWeekly = body.url?.includes("format=credits")
+        return makeResp(200, isWeekly ? xaiOverageWeekly : xaiOverageMonthly)
+      }
+      if (body.auth_index === "abc123") return makeResp(200, makeCodexBody())
+      if (body.auth_index === "def456") return makeResp(200, makeClaudeBody())
+      return makeResp(200, { status_code: 500, body: "{}" })
+    }
+    return makeResp(404, {})
+  }
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
   const monthly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:monthly")!
   expect(monthly.used).toBe(150) // 1500/1000*100, NOT capped at 100
 })
@@ -178,8 +216,9 @@ test("xai: required headers sent", async () => {
       const body = JSON.parse(init?.body as string)
       if (body.auth_index === "ghi789") {
         calls.xai = body.header
-        // Return both weekly and monthly with same body
-        return makeResp(200, makeXaiBody())
+        // Return weekly body for ?format=credits, monthly body otherwise
+        const isWeekly = body.url?.includes("format=credits")
+        return makeResp(200, isWeekly ? makeXaiWeeklyBody() : makeXaiMonthlyBody())
       }
       return makeResp(200, { status_code: 200, body: "{}" })
     }
@@ -195,7 +234,7 @@ test("failed accounts produce error metric + push to errors[] for badge escalati
   const fetchImpl = makeFakeFetch(
     { status_code: 401, body: "{}" }, // codex upstream 401
     makeClaudeBody(),
-    makeXaiBody(),
+    undefined, // xai uses weekly/monthly bodies via makeFakeFetch internal logic
   )
   const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
   // Codex account has error metric

@@ -293,6 +293,9 @@ async function queryCodex(
   if (upstreamErr) return upstreamErr
 
   try {
+    if (result.body === "" || result.body === "{}") {
+      return { metrics: [], error: "no quota data (empty body)", errorKind: "no-data", retryable: false }
+    }
     const parsed = JSON.parse(result.body) as {
       rate_limit?: Record<string, { used_percent?: unknown; limit_window_seconds?: unknown; reset_at?: unknown } | undefined>
     }
@@ -350,6 +353,9 @@ async function queryClaude(
   if (upstreamErr) return upstreamErr
 
   try {
+    if (result.body === "" || result.body === "{}") {
+      return { metrics: [], error: "no quota data (empty body)", errorKind: "no-data", retryable: false }
+    }
     const parsed = JSON.parse(result.body) as Record<string, unknown>
     const metrics: NormalizedMetric[] = []
     for (const [key, value] of Object.entries(parsed)) {
@@ -463,7 +469,11 @@ async function queryXai(
   const monthlyLimit = readXaiCents(monthlyCfg, "monthly_limit", "monthlyLimit")
   const used = readXaiCents(monthlyCfg, "used")
   const onDemandCap = readXaiCents(monthlyCfg, "on_demand_cap", "onDemandCap")
-  const onDemandUsed = readXaiCents(monthlyCfg, "on_demand_used", "onDemandUsed")
+  let onDemandUsed = readXaiCents(monthlyCfg, "on_demand_used", "onDemandUsed")
+  // On-demand usage not reported but overage exists: derive from used - monthly_limit
+  if (onDemandUsed === undefined && used !== undefined && monthlyLimit !== undefined && used > monthlyLimit) {
+    onDemandUsed = used - monthlyLimit
+  }
   const billingPeriodEnd = typeof monthlyCfg["billing_period_end"] === "string" ? monthlyCfg["billing_period_end"] as string : undefined
 
   if (monthlyLimit !== undefined && monthlyLimit > 0 && used !== undefined) {

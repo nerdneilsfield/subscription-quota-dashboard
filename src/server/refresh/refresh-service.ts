@@ -255,13 +255,17 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     }
 
     // Dynamic subscription snapshots: write a snapshot row for each metric
-    // declared under a DynamicSubscription returned by the adapter. History is
+    // declared under a DynamicSubscription returned by the adapter. Skip
+    // status/error metrics (no numeric value -> dead NULL row). History is
     // not tracked for dynamic subscriptions (adapters produce none).
     if (result.dynamicSubscriptions) {
       for (const dynSub of result.dynamicSubscriptions) {
         for (const providerMetricId of dynSub.providerMetricIds) {
           const matched = result.metrics.find((m) => m.providerMetricId === providerMetricId)
           if (!matched) continue
+          // Skip status/error metrics: they have no numeric value to snapshot
+          if (matched.sourceValueKind === "status") continue
+          if (matched.used === undefined && matched.remaining === undefined && matched.authoritativeValue === undefined) continue
           const metricKey = buildMetricKey(paId, dynSub.id, providerMetricId)
           const snap: SnapshotInsert = {
             providerAccountId: paId,

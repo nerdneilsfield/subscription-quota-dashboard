@@ -35,7 +35,11 @@ export function formatRelativeTime(iso: string, now: Date): string {
     const q = Math.max(1, Math.round(qty))
     return future ? `in ${q}${unit}` : `${q}${unit} ago`
   }
-  if (secs < 60) return fmt(secs, "s")
+  if (secs < 60) {
+    // Zero diff means "just now", not "in 1s"
+    if (abs < 500) return "just now"
+    return fmt(secs, "s")
+  }
   if (mins < 60) return fmt(mins, "m")
   if (hours < 24) return fmt(hours, "h")
   return fmt(days, "d")

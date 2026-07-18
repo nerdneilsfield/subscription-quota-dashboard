@@ -21,11 +21,16 @@ import { createVolcengineProvider } from "./providers/volcengine"
 import { createCliproxyProvider } from "./providers/cliproxy"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
+import { parseTrustedProxies } from "./http/client-ip"
 
 const port = Number(process.env.PORT ?? 3000)
+// Default to loopback only. Set HOST=0.0.0.0 (or a specific interface) to
+// listen on other interfaces — e.g. behind a reverse proxy on another host.
+const hostname = process.env.HOST ?? "127.0.0.1"
 const configPath = process.env.CONFIG_PATH ?? "config/dashboard.config.ts"
 const dbPath = process.env.DASHBOARD_DB ?? "data/dashboard.db"
 const nodeEnv = process.env.NODE_ENV === "production" ? "production" : "development"
+const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES)
 
 async function main(): Promise<void> {
   const config = await loadDashboardConfigFromFile(resolve(configPath))
@@ -65,12 +70,13 @@ async function main(): Promise<void> {
     providers,
     sessionSecret,
     environment: nodeEnv,
+    trustedProxies,
     ...(staticDir !== undefined ? { staticDir } : {}),
   }
 
   const app = createApp(deps)
-  serve({ fetch: app.fetch, port })
-  console.log(`subscription-quota-dashboard listening on http://127.0.0.1:${port}`)
+  serve({ fetch: app.fetch, port, hostname })
+  console.log(`subscription-quota-dashboard listening on http://${hostname}:${port}`)
 }
 
 main().catch((err) => {

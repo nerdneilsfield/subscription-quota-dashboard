@@ -97,9 +97,10 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       const accounts: FilteredAccount[] = authFiles.flatMap((a): FilteredAccount[] => {
         if (!a.provider || !queryProviders.includes(a.provider)) return []
         if (a.disabled === true) return []
-        if (a.status !== undefined && a.status !== "active") return []
+        // Do NOT filter on status: CLIProxy marks quota-exhausted / cooldown
+        // accounts with status:"error" or unavailable:true. These are the most
+        // important to surface. Only `disabled:true` is a hard skip.
         if (!a.auth_index || a.auth_index === "") return []
-        // Do NOT skip unavailable (quota exceeded = most important to show)
         return [{
           provider: a.provider,
           authIndex: a.auth_index,
@@ -154,9 +155,11 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
           dynamicSubscriptions.push(makeDynSub(acct, accountMetrics.map(m => m.providerMetricId)))
         }
 
-        // Fast-fail: if entire batch had management-auth errors, abort remaining.
-        // Uses structured errorKind (not string matching).
-        const allMgmtAuthFailed = batchResults.every(r => r.errorKind === "mgmt-auth" || r.errorKind === "mgmt-not-found")
+        // Fast-fail: only abort remaining accounts when the management API
+        // itself rejects authentication (401/403). A 400 (stale auth_index,
+        // per-account) is NOT a global failure - healthy accounts in later
+        // batches should still be queried.
+        const allMgmtAuthFailed = batchResults.every(r => r.errorKind === "mgmt-auth")
         if (allMgmtAuthFailed && i + API_CALL_CONCURRENCY < accounts.length) {
           aborted = true
           adapterErrors.push({ message: "All api-call requests in batch failed management authentication; aborting remaining", retryable: false })
@@ -255,7 +258,7 @@ async function apiCall(
     const body = await res.json().catch(() => ({})) as { error?: string }
     const raw = body.error ?? "api-call bad request"
     const hint = raw.toLowerCase().includes("auth token") ? " (stale auth_index)" : ""
-    return { ok: false, error: `${raw}${hint}`, errorKind: "mgmt-not-found", retryable: false }
+    return { ok: false, error: `${raw}${hint}`, errorKind: "upstream-error", retryable: false }
   }
   if (res.status === 401 || res.status === 403) {
     return { ok: false, error: "management API authentication failed", errorKind: "mgmt-auth", retryable: false }
@@ -312,7 +315,13 @@ async function queryCodex(
       if (limitWindowSeconds === 18000) { name = "five_hour"; duration = "5h" }
       else if (limitWindowSeconds === 604800) { name = "weekly"; duration = "7d" }
       else if (limitWindowSeconds === 2592000) { name = "monthly"; duration = "30d" }
-      else continue
+      else {
+        // Unknown window (e.g. daily, hourly): produce a generic metric so
+        // the data isn't silently dropped. Label as hours for readability.
+        const hours = Math.max(1, Math.round(limitWindowSeconds / 3600))
+        name = `window_${limitWindowSeconds}`
+        duration = `${hours}h`
+      }
 
       const resetAt = typeof window.reset_at === "number" && window.reset_at > 0
         ? new Date(window.reset_at * 1000).toISOString()
@@ -320,7 +329,7 @@ async function queryCodex(
 
       metrics.push({
         providerMetricId: `codex:${authIndex}:${name}`,
-        label: name === "five_hour" ? "5h" : name === "weekly" ? "Weekly" : "Monthly",
+        label: name === "five_hour" ? "5h" : name === "weekly" ? "Weekly" : name === "monthly" ? "Monthly" : name.replace(/_/g, " "),
         unit: "%",
         used,
         limit: 100,
@@ -436,6 +445,17 @@ async function queryXai(
   }
 
   const config = weeklyConfig ?? monthlyConfig
+
+  // Track partial failures: if one endpoint failed (non-auth, non-2xx) but
+  // the other succeeded, surface a warning instead of silently swallowing it.
+  const partialWarnings: string[] = []
+  if (!weeklyResult.ok && monthlyConfig !== undefined && weeklyResult.errorKind !== "mgmt-auth") {
+    partialWarnings.push(`weekly endpoint failed: ${weeklyResult.error}`)
+  }
+  if (!monthlyResult.ok && weeklyConfig !== undefined && monthlyResult.errorKind !== "mgmt-auth") {
+    partialWarnings.push(`monthly endpoint failed: ${monthlyResult.error}`)
+  }
+
   if (!config) {
     const err = !weeklyResult.ok ? weeklyResult.error
       : !monthlyResult.ok ? monthlyResult.error
@@ -505,6 +525,9 @@ async function queryXai(
 
   if (metrics.length === 0) {
     return { metrics: [], error: "no billing data parsed", errorKind: "no-data", retryable: false }
+  }
+  if (partialWarnings.length > 0) {
+    return { metrics, error: partialWarnings.join("; "), errorKind: "unknown", retryable: true }
   }
   return { metrics }
 }

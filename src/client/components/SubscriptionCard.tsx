@@ -23,18 +23,17 @@ export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
           <span className="status-badge__text">{LABEL[subscription.status]}</span>
         </span>
       </header>
-      {subscription.status !== "unavailable" &&
-        subscription.errors?.map((err, i) => <ErrorBanner key={i} error={err} stale={stale} />)}
-      {unavailable && !hasMetrics && (
-        <div className="subscription-card__unavailable">
-          {subscription.errors?.[0]?.message ?? "This subscription is currently unavailable."}
-        </div>
-      )}
-      {!unavailable && hasMetrics && (
-        <div className="subscription-card__metrics">
+      {subscription.errors?.map((err, i) => <ErrorBanner key={i} error={err} stale={stale} />)}
+      {hasMetrics && (
+        <div className={`subscription-card__metrics${unavailable ? " subscription-card__metrics--stale" : ""}`}>
           {subscription.metrics.map((m) => (
             <MetricCard key={m.id} metric={m} now={now} />
           ))}
+        </div>
+      )}
+      {!hasMetrics && unavailable && (
+        <div className="subscription-card__unavailable">
+          {subscription.errors?.[0]?.message ?? "This subscription is currently unavailable."}
         </div>
       )}
     </section>

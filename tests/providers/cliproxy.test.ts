@@ -33,6 +33,8 @@ const AUTH_FILES_BODY = {
     { auth_index: "def456", provider: "claude", label: "claude@example.com", disabled: false, status: "active" },
     { auth_index: "ghi789", provider: "xai", label: "grok@example.com", disabled: false, status: "active" },
     { auth_index: "skip1", provider: "codex", disabled: true, status: "disabled" },
+    // Quota-exhausted account: status:"error" + unavailable:true - must NOT be filtered
+    { auth_index: "err001", provider: "codex", label: "exhausted@example.com", disabled: false, status: "error", unavailable: true },
   ],
 }
 
@@ -101,6 +103,8 @@ function makeFakeFetch(codexBody = makeCodexBody(), claudeBody = makeClaudeBody(
         const isWeekly = body.url?.includes("format=credits")
         return makeResp(200, isWeekly ? makeXaiWeeklyBody() : makeXaiMonthlyBody())
       }
+      // err001 (exhausted account) - return a valid codex body so it produces metrics
+      if (body.auth_index === "err001") return makeResp(200, codexBody)
       return makeResp(200, { status_code: 500, body: "{}" })
     }
     return makeResp(404, {})
@@ -112,7 +116,7 @@ test("discovers accounts, filters by provider, skips disabled", async () => {
   const fetchImpl = makeFakeFetch()
   const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
   expect(result.dynamicSubscriptions).toBeDefined()
-  expect(result.dynamicSubscriptions!.length).toBe(3) // skip1 filtered
+  expect(result.dynamicSubscriptions!.length).toBe(4) // skip1 filtered, err001 kept
 })
 
 test("codex: reset_at converted from Unix seconds to ISO", async () => {
@@ -287,9 +291,9 @@ test("api-call 502 -> retryable error for that account", async () => {
     return makeResp(502, { error: "request failed" })
   }
   const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
-  expect(result.dynamicSubscriptions!.length).toBe(3) // still produced
+  expect(result.dynamicSubscriptions!.length).toBe(4) // all accounts produced
   const errorMetrics = result.metrics.filter(m => m.sourceValueKind === "status")
-  expect(errorMetrics.length).toBe(3) // all accounts failed
+  expect(errorMetrics.length).toBe(4) // all accounts failed
 })
 
 test("api-call 400 'auth token not found' -> account error with stale auth_index note", async () => {
@@ -321,4 +325,85 @@ test("codex 429 -> classified as upstream error (not parse error)", async () => 
   const codexError = result.metrics.find(m => m.providerMetricId === "codex:abc123:error")
   expect(codexError).toBeDefined()
   expect(codexError!.notes).toContain("429")
+})
+
+// P1.4: status:"error" + unavailable:true accounts must NOT be filtered
+test("quota-exhausted account (status:error + unavailable:true) is kept and queried", async () => {
+  const fetchImpl = makeFakeFetch()
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
+  // err001 should appear in dynamicSubscriptions
+  const errSub = result.dynamicSubscriptions!.find(ds => ds.id === "cliproxy:codex:err001")
+  expect(errSub).toBeDefined()
+  // And should have real metrics (not just an error metric)
+  const errMetric = result.metrics.find(m => m.providerMetricId === "codex:err001:five_hour")
+  expect(errMetric).toBeDefined()
+})
+
+// P1.5: 400 (stale auth_index) should NOT trigger global fast-fail
+test("batch of 400s does NOT abort remaining accounts", async () => {
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
+    // Every api-call returns 400
+    return makeResp(400, { error: "auth token not found" })
+  }
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  // All 4 non-disabled accounts should have error metrics, not "skipped"
+  const skipped = result.metrics.filter(m => m.notes?.includes("skipped"))
+  expect(skipped.length).toBe(0)
+  const errors = result.metrics.filter(m => m.sourceValueKind === "status")
+  expect(errors.length).toBe(4) // abc123, def456, ghi789, err001 - all queried, all got 400
+})
+
+// P2.4: unknown limit_window_seconds produces a generic metric
+test("codex: unknown limit_window_seconds produces generic window metric", async () => {
+  const unknownBody = {
+    status_code: 200,
+    body: JSON.stringify({
+      rate_limit: {
+        primary_window: { used_percent: 50, limit_window_seconds: 86400, reset_at: 1783275600 },
+      },
+    }),
+  }
+  const fetchImpl = makeFakeFetch(unknownBody)
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
+  const generic = result.metrics.find(m => m.providerMetricId === "codex:abc123:window_86400")
+  expect(generic).toBeDefined()
+  expect(generic!.used).toBe(50)
+  expect(generic!.window?.kind).toBe("rolling")
+  if (generic!.window?.kind === "rolling") {
+    expect(generic!.window.duration).toBe("24h")
+  }
+})
+
+// P2.3: xai partial failure - weekly fails, monthly succeeds
+test("xai: weekly 500 + monthly 200 produces monthly metrics + partial warning", async () => {
+  const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
+    if (url.includes("/api-call")) {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {}
+      if (body.auth_index === "ghi789") {
+        const isWeekly = body.url?.includes("format=credits")
+        if (isWeekly) return makeResp(502, { error: "bad gateway" })
+        return makeResp(200, makeXaiMonthlyBody())
+      }
+      if (body.auth_index === "abc123") return makeResp(200, makeCodexBody())
+      if (body.auth_index === "def456") return makeResp(200, makeClaudeBody())
+      if (body.auth_index === "err001") return makeResp(200, makeCodexBody())
+      return makeResp(200, { status_code: 500, body: "{}" })
+    }
+    return makeResp(404, {})
+  }
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  // Monthly metric should still be present
+  const monthly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:monthly")
+  expect(monthly).toBeDefined()
+  expect(monthly!.used).toBe(20) // 200/1000*100
+  // Weekly should be absent (weekly endpoint failed)
+  const weekly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:weekly")
+  expect(weekly).toBeUndefined()
+  // An error should be recorded for this account
+  const xaiError = result.errors?.find(e => e.message.includes("ghi789") && e.message.includes("weekly"))
+  expect(xaiError).toBeDefined()
 })

@@ -24,6 +24,10 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
   const sessionCtrlRef = useRef<AbortController | null>(null)
 
   // checking-session: one getDashboard with existing cookies.
+  // Re-run only when profileId changes (navigating to a different profile
+  // remounts this component, but listing profileId makes the intent explicit).
+  // Range is intentionally captured from the initial render: range switches
+  // are handled by Dashboard's own fetchRange effect, not by re-checking auth.
   useEffect(() => {
     const ctrl = new AbortController()
     sessionCtrlRef.current = ctrl
@@ -45,7 +49,7 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
       ctrl.abort()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [profileId])
 
   const retrySession = () => {
     setSessionError(undefined)
@@ -77,7 +81,8 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
     if (ctrl.signal.aborted) return
     if (res.ok) {
       // fetch the dashboard payload so Dashboard can skip its own initial fetch
-      const dash = await getDashboard(profileId, range, undefined)
+      const dash = await getDashboard(profileId, range, ctrl.signal)
+      if (ctrl.signal.aborted) return
       if (dash.ok) {
         setInitialPayload(dash.value)
         setAuth("authenticated")

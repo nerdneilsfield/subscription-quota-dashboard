@@ -126,7 +126,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
   }
 
   type AccountRefreshOutcome =
-    | { ok: true; result: ProviderRefreshResult; fresh: boolean }
+    | { ok: true; result: ProviderRefreshResult; fresh: boolean; hadErrors: boolean }
     | { ok: false; error: string }
 
   // Refresh ONE provider account (singleflight + concurrency cap + adapter call).
@@ -134,7 +134,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
   function refreshProviderAccount(paId: string, staleCache: ProviderCacheRecord | undefined): Promise<AccountRefreshOutcome> {
     const existing = inFlight.get(paId)
     if (existing !== undefined) {
-      return existing.then((o) => o.ok ? { ok: true, result: o.result, fresh: false } : { ok: false, error: o.error })
+      return existing.then((o) => o.ok ? { ok: true, result: o.result, fresh: false, hadErrors: o.hadErrors } : { ok: false, error: o.error })
     }
 
     const providerAccount = config.providers.get(paId)
@@ -160,7 +160,8 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
             : {}),
         }
         const result = await adapter.refresh(input)
-        return { ok: true, result, fresh: true }
+        const hadErrors = (result.errors ?? []).length > 0
+        return { ok: true, result, fresh: true, hadErrors }
       } catch (e) {
         const message = e instanceof Error ? e.message : "provider refresh failed"
         return { ok: false, error: message }
@@ -285,19 +286,31 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       }
     }
 
-    const cacheStatus: ProviderCacheRecord["status"] = "ok"
+    const cacheStatus: ProviderCacheRecord["status"] = (() => {
+      const hasErrors = (result.errors ?? []).length > 0
+      const hasMetrics = result.metrics.length > 0
+      if (hasErrors && !hasMetrics) return "unavailable"
+      if (hasErrors && hasMetrics) return "stale"
+      return "ok"
+    })()
 
     // C3 fix: When the adapter returned zero metrics AND has errors (failure path),
     // preserve the last-known-good normalized metrics so dynamic subscription
     // cards don't disappear. The coalesce on dynamic_subscriptions_json already
     // preserves the subscription list; this extends the same semantics to metrics.
+    // Additionally, preserve the old fetchedAt/staleAfter so the cache doesn't
+    // pretend to be fresh when the refresh actually failed.
     let normalizedForCache = result.metrics as Array<Record<string, unknown>>
     let dynamicSubsForCache = result.dynamicSubscriptions
+    let cacheFetchedAt = result.fetchedAt
+    let cacheStaleAfter = result.staleAfter
     if (result.metrics.length === 0 && (result.errors ?? []).length > 0) {
-      // Adapter failure: preserve old metrics + old dynamicSubscriptions
+      // Adapter failure: preserve old metrics + old dynamicSubscriptions + old timestamps
       const existing = storage.providerCache.get(paId)
       if (existing) {
         normalizedForCache = existing.normalized.metrics
+        cacheFetchedAt = existing.fetchedAt
+        cacheStaleAfter = existing.staleAfter
         if (dynamicSubsForCache === undefined && existing.dynamicSubscriptions !== undefined) {
           dynamicSubsForCache = existing.dynamicSubscriptions
         }
@@ -306,8 +319,8 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
 
     const cacheRecord: ProviderCacheRecord = {
       providerAccountId: paId,
-      fetchedAt: result.fetchedAt,
-      staleAfter: result.staleAfter,
+      fetchedAt: cacheFetchedAt,
+      staleAfter: cacheStaleAfter,
       status: cacheStatus,
       normalized: { metrics: normalizedForCache },
       errors: result.errors ?? [],
@@ -369,16 +382,25 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     )
 
     const errors: Array<{ message: string }> = []
+    const warnings: string[] = []
     let anyOk = false
     for (const o of outcomes) {
-      if (o.ok) anyOk = true
-      else errors.push({ message: o.error })
+      if (o.ok) {
+        if (o.hadErrors) {
+          // Adapter resolved but returned errors alongside metrics (partial success)
+          warnings.push(`${paIds[outcomes.indexOf(o)]}: adapter reported errors`)
+        } else {
+          anyOk = true
+        }
+      } else {
+        errors.push({ message: o.error })
+      }
     }
 
     storage.refreshRuns.finish({
       id: runId,
       finishedAt: now().toISOString(),
-      status: errors.length === 0 ? "ok" : "error",
+      status: errors.length === 0 && warnings.length === 0 ? "ok" : "error",
       errors,
     })
 
@@ -395,6 +417,10 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     if (errors.length > 0) {
       const safeError = errors.map((e) => e.message).join("; ")
       return { status: "degraded", payload, error: safeError }
+    }
+    if (warnings.length > 0) {
+      const safeWarning = warnings.join("; ")
+      return { status: "degraded", payload, error: safeWarning }
     }
 
     return { status: "ok", payload }

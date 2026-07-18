@@ -17,6 +17,7 @@ import {
   appSecurityHeaders,
   isAllowedDevCorsOrigin,
 } from "./security"
+import { resolveClientIp } from "./client-ip"
 import { createRefreshService } from "../refresh/refresh-service"
 
 export type AppDeps = {
@@ -27,6 +28,7 @@ export type AppDeps = {
   now?: () => Date
   staticDir?: string
   environment?: "development" | "production" | "test"
+  trustedProxies?: string[]
 }
 
 const VALID_RANGES: ReadonlySet<string> = new Set(["1h", "24h", "7d", "30d"])
@@ -72,8 +74,17 @@ function findCookiePair(cookieHeader: string, name: string): string | undefined 
   return undefined
 }
 
-function originAllowed(origin: string | undefined): boolean {
+function originAllowed(origin: string | undefined, c: Context, isProduction: boolean): boolean {
   if (origin === undefined || origin === "") return true
+  // In production, allow same-origin requests (Origin matches the request URL).
+  if (isProduction) {
+    try {
+      const reqOrigin = new URL(c.req.url).origin
+      if (origin === reqOrigin) return true
+    } catch {
+      // fall through to dev CORS check
+    }
+  }
   return isAllowedDevCorsOrigin(origin)
 }
 
@@ -100,6 +111,13 @@ export function createApp(deps?: AppDeps): Hono {
   const now = deps.now ?? (() => new Date())
   const nowMs = (): number => now().getTime()
   const secure = deps.environment === "production"
+  const trustedProxies = new Set(deps.trustedProxies ?? [])
+  const loginRateLimiter = createRateLimiter({
+    maxAttempts: 5,
+    windowMs: 5 * 60 * 1000,
+    now: nowMs,
+  })
+  const MAX_LOGIN_BODY_BYTES = 4096
 
   const refreshService = createRefreshService({
     config: deps.config,
@@ -112,6 +130,13 @@ export function createApp(deps?: AppDeps): Hono {
       now: nowMs,
     }),
   })
+
+  function clientIp(c: Context): string {
+    const xff = c.req.header("x-forwarded-for")
+    // Hono's node-server adapter exposes the raw IncomingMessage
+    const socketIp = (c.req.raw as unknown as { socket?: { remoteAddress?: string } }).socket?.remoteAddress
+    return resolveClientIp(socketIp, xff, trustedProxies)
+  }
 
   // Cache-Control: no-store on all API responses.
   app.use("/api/*", async (c, next) => {
@@ -155,7 +180,15 @@ export function createApp(deps?: AppDeps): Hono {
     if (!profile) return c.json({ error: "unauthorized" }, 401)
 
     const origin = c.req.header("origin")
-    if (!originAllowed(origin)) return c.json({ error: "forbidden" }, 403)
+    if (!originAllowed(origin, c, secure)) return c.json({ error: "forbidden" }, 403)
+
+    // Rate-limit login attempts per IP + profile to prevent brute-force.
+    const ip = clientIp(c)
+    const rateLimitKey = `login:${ip}:${profileId}`
+    if (!loginRateLimiter.check(rateLimitKey)) {
+      c.header("Retry-After", String(5 * 60))
+      return c.json({ error: "rate_limited" }, 429)
+    }
 
     let viewKey: string | undefined
     const authHeader = c.req.header("authorization")
@@ -166,6 +199,11 @@ export function createApp(deps?: AppDeps): Hono {
       // Body auth: require JSON Content-Type.
       if (!isJsonContentType(c.req.header("content-type"))) {
         return c.json({ error: "content-type must be application/json" }, 400)
+      }
+      // Reject oversized bodies before parsing.
+      const contentLength = Number(c.req.header("content-length") ?? 0)
+      if (contentLength > MAX_LOGIN_BODY_BYTES) {
+        return c.json({ error: "request body too large" }, 413)
       }
       try {
         const body = (await c.req.json()) as { viewKey?: unknown }
@@ -179,6 +217,8 @@ export function createApp(deps?: AppDeps): Hono {
       return c.json({ error: "unauthorized" }, 401)
     }
 
+    // Successful login: reset the rate-limit bucket so the user isn't penalized.
+    loginRateLimiter.reset(rateLimitKey)
     const cookie = createSessionCookie(profile.id, viewKey, deps!.sessionSecret, nowMs(), SESSION_MAX_AGE_SECONDS, secure)
     c.header("set-cookie", cookie)
     return c.json({ ok: true }, 200)
@@ -202,7 +242,7 @@ export function createApp(deps?: AppDeps): Hono {
     const profileId = c.req.param("profileId")
 
     const origin = c.req.header("origin")
-    if (!originAllowed(origin)) return c.json({ error: "forbidden" }, 403)
+    if (!originAllowed(origin, c, secure)) return c.json({ error: "forbidden" }, 403)
 
     const authFail = authenticate(c, profileId)
     if (authFail !== null) return authFail
@@ -210,7 +250,7 @@ export function createApp(deps?: AppDeps): Hono {
     const parsed = resolveRangeParam(new URL(c.req.url))
     if (!parsed.ok) return c.json({ error: "invalid range" }, 400)
 
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
+    const ip = clientIp(c)
     const outcome = await refreshService.refreshProfile({ profileId, ip, range: parsed.range })
 
     switch (outcome.status) {

@@ -424,6 +424,12 @@ button {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* When the subscription is unavailable but we still have cached metrics,
+   dim them to signal staleness. */
+.subscription-card__metrics--stale {
+  opacity: 0.6;
+}
+
 .metric-card {
   display: grid;
   grid-template-columns: minmax(8rem, 0.85fr) minmax(0, 1.65fr) minmax(5rem, 0.65fr);

@@ -487,12 +487,35 @@ test("all subscriptions unavailable renders dashboard-level banner and greyed ca
   expect(Array.from(cards).every((c) => c.getAttribute("data-status") === "unavailable")).toBe(true)
 })
 
-test("unavailable subscription hides metric details and shows centered safe error", async () => {
+test("unavailable subscription with no metrics shows centered safe error", async () => {
   await loadDashboard()
-  const gone = screen().getByText("No provider configured").closest("[data-subscription]")
+  const gone = screen().getAllByText("No provider configured")[0]!.closest("[data-subscription]")
   expect(gone).toBeTruthy()
   expect(gone?.getAttribute("data-status")).toBe("unavailable")
   expect(gone?.querySelector('[role="progressbar"]')).toBeNull()
+})
+
+test("unavailable subscription with cached metrics shows dimmed metrics + error banner", async () => {
+  const payload = richPayload()
+  const goneSub = payload.subscriptions.find((s) => s.id === "gone")!
+  goneSub.metrics = [
+    {
+      id: "gone-balance", metricKey: "gone-balance", label: "Balance", unit: "$",
+      status: "stale", limit: 100, used: 40, remaining: 60,
+      display: { module: "period-quota-card", sourceConfidence: "known" },
+      window: { kind: "rolling", label: "Rolling 1h", duration: "1h" },
+    },
+  ]
+  await loadDashboard(payload)
+  const gone = screen().getByText("Gone").closest("[data-subscription]")
+  expect(gone?.getAttribute("data-status")).toBe("unavailable")
+  // Error banner is visible
+  expect(gone?.querySelector(".banner")).toBeTruthy()
+  // Metrics are rendered (dimmed via --stale class)
+  const metricsDiv = gone?.querySelector(".subscription-card__metrics--stale")
+  expect(metricsDiv).toBeTruthy()
+  // Progressbar exists inside the dimmed metrics
+  expect(metricsDiv?.querySelector('[role="progressbar"]')).toBeTruthy()
 })
 
 // =====================================================================

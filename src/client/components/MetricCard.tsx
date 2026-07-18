@@ -123,7 +123,7 @@ function PeriodBody({ metric }: { metric: DashboardMetric }) {
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round(percent)}
+          aria-valuenow={Math.min(100, Math.round(percent))}
           data-status={metric.status}
         >
           <div className="progress__fill" style={{ width: `${barWidth}%` }} />

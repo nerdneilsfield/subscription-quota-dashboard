@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useSearchParams } from "react-router-dom"
 import type { DashboardPayload } from "../../shared/dashboard-payload"
 import type { RangeKey } from "../../shared/domain"
@@ -38,16 +38,30 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
   const [error, setError] = useState<ApiFailure | undefined>()
   const [rangeLoading, setRangeLoading] = useState(false)
   const [refresh, setRefresh] = useState<RefreshState>({ state: "idle" })
+  // A single shared abort controller for both range fetches and manual
+  // refreshes. Switching range aborts an in-flight refresh, and vice versa,
+  // so a stale slow response can never overwrite a newer one.
   const abortRef = useRef<AbortController | null>(null)
-  const refreshAbortRef = useRef<AbortController | null>(null)
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hiddenSinceRef = useRef<number | null>(null)
+  // Generation token: bumped on every range switch or refresh. A response
+  // from an older generation is discarded before calling setPayload.
+  const genRef = useRef(0)
 
-  const now = useMemo(() => (payload ? new Date(payload.generatedAt) : new Date()), [payload])
+  // "now" snaps to the server's generatedAt when a payload arrives, then
+  // ticks every 30s via wall-clock so relative times advance.
+  const [now, setNow] = useState(() => payload ? new Date(payload.generatedAt) : new Date())
+  useEffect(() => {
+    if (payload) setNow(new Date(payload.generatedAt))
+  }, [payload])
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000)
+    return () => clearInterval(id)
+  }, [])
 
   const handleResult = useCallback(
-    (range: RangeKey, res: ApiResult<DashboardPayload>, ctrl: AbortController, silent: boolean) => {
-      if (ctrl.signal.aborted) return
+    (range: RangeKey, res: ApiResult<DashboardPayload>, ctrl: AbortController, gen: number, silent: boolean) => {
+      if (ctrl.signal.aborted || gen !== genRef.current) return
       if (res.ok) {
         setPayload(res.value)
         setPhase("ready")
@@ -71,10 +85,11 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
       abortRef.current?.abort()
       const ctrl = new AbortController()
       abortRef.current = ctrl
+      const gen = ++genRef.current
       if (mode === "initial") setPhase("loading")
       else if (mode === "range") setRangeLoading(true)
       const res = await getDashboard(profileId, nextRange, ctrl.signal)
-      handleResult(nextRange, res, ctrl, mode === "silent")
+      handleResult(nextRange, res, ctrl, gen, mode === "silent")
       if (mode === "range") setRangeLoading(false)
     },
     [profileId, handleResult],
@@ -115,18 +130,19 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
   useEffect(() => {
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
-      refreshAbortRef.current?.abort()
       abortRef.current?.abort()
     }
   }, [])
 
   const doRefresh = useCallback(async () => {
-    refreshAbortRef.current?.abort()
+    // Abort any in-flight range fetch; refresh takes over.
+    abortRef.current?.abort()
     const ctrl = new AbortController()
-    refreshAbortRef.current = ctrl
+    abortRef.current = ctrl
+    const gen = ++genRef.current
     setRefresh({ state: "refreshing" })
     const res = await refreshDashboard(profileId, range, ctrl.signal)
-    if (ctrl.signal.aborted) return
+    if (ctrl.signal.aborted || gen !== genRef.current) return
     if (res.ok) {
       setPayload(res.value)
       const hasStale = res.value.subscriptions.some(

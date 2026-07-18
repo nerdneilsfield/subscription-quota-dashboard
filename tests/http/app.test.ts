@@ -97,6 +97,7 @@ function makeDeps(overrides: {
   now?: () => Date
   staticDir?: string
   environment?: "development" | "production" | "test"
+  trustedProxies?: string[]
 } = {}): AppDeps {
   const config = loadDashboardConfig(baseConfig())
   const storage = overrides.storage ?? makeStorage()
@@ -112,6 +113,7 @@ function makeDeps(overrides: {
     now: overrides.now ?? (() => new Date(NOW_MS)),
     ...(overrides.staticDir !== undefined ? { staticDir: overrides.staticDir } : {}),
     ...(overrides.environment !== undefined ? { environment: overrides.environment } : {}),
+    ...(overrides.trustedProxies !== undefined ? { trustedProxies: overrides.trustedProxies } : {}),
   }
 }
 
@@ -388,4 +390,103 @@ test("E2E: refresh writes cache/history/snapshots, then GET returns points, rang
   expect(raw).not.toContain(VIEW_KEY)
   expect(raw).not.toContain("poe-key")
   expect(raw).not.toContain(SESSION_SECRET)
+})
+
+// --- P1.2: Production Origin check allows same-origin ---
+
+test("P1.2: production same-origin POST is allowed (not 403)", async () => {
+  const app = createApp(makeDeps({ environment: "production" }))
+  // In production, Origin matches the request URL origin.
+  // app.request uses http://localhost by default.
+  const res = await app.request("/api/dashboard/self/refresh", {
+    method: "POST",
+    headers: { ...authHeaders(), Origin: "http://localhost" },
+  })
+  // Should NOT be 403 - same-origin is allowed in production.
+  expect(res.status).not.toBe(403)
+})
+
+test("P1.2: production cross-origin POST is rejected (403)", async () => {
+  const app = createApp(makeDeps({ environment: "production" }))
+  const res = await app.request("/api/dashboard/self/refresh", {
+    method: "POST",
+    headers: { ...authHeaders(), Origin: "https://evil.example.com" },
+  })
+  expect(res.status).toBe(403)
+})
+
+test("P1.2: dev mode allows Vite origin", async () => {
+  const app = createApp(makeDeps({ environment: "development" }))
+  const res = await app.request("/api/dashboard/self/refresh", {
+    method: "POST",
+    headers: { ...authHeaders(), Origin: "http://localhost:5173" },
+  })
+  expect(res.status).not.toBe(403)
+})
+
+// --- P2.1: Login rate limiting ---
+
+test("P2.1: 6th login attempt within 5min returns 429", async () => {
+  const app = createApp(makeDeps())
+  // Make 5 failed attempts (they consume rate-limit tokens).
+  for (let i = 0; i < 5; i++) {
+    const res = await app.request("/api/session/self", {
+      method: "POST",
+      headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
+      body: JSON.stringify({ viewKey: "wrong" }),
+    })
+    expect(res.status).toBe(401)
+  }
+  // 6th attempt should be rate-limited.
+  const res = await app.request("/api/session/self", {
+    method: "POST",
+    headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
+    body: JSON.stringify({ viewKey: "wrong" }),
+  })
+  expect(res.status).toBe(429)
+  expect(res.headers.get("Retry-After")).toBeTruthy()
+})
+
+test("P2.1: successful login resets rate-limit bucket", async () => {
+  const app = createApp(makeDeps())
+  // 4 failed attempts.
+  for (let i = 0; i < 4; i++) {
+    await app.request("/api/session/self", {
+      method: "POST",
+      headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
+      body: JSON.stringify({ viewKey: "wrong" }),
+    })
+  }
+  // 5th: successful login.
+  const ok = await app.request("/api/session/self", {
+    method: "POST",
+    headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
+    body: JSON.stringify({ viewKey: VIEW_KEY }),
+  })
+  expect(ok.status).toBe(200)
+  // After success, bucket is reset: 5 more attempts should work.
+  for (let i = 0; i < 5; i++) {
+    const res = await app.request("/api/session/self", {
+      method: "POST",
+      headers: { "content-type": "application/json", Origin: ALLOWED_ORIGIN },
+      body: JSON.stringify({ viewKey: "wrong" }),
+    })
+    expect(res.status).toBe(401)
+  }
+})
+
+test("P2.1: oversized login body returns 413", async () => {
+  const app = createApp(makeDeps())
+  // Build a body > 4KB.
+  const big = "x".repeat(5000)
+  const res = await app.request("/api/session/self", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "content-length": String(big.length + 20),
+      Origin: ALLOWED_ORIGIN,
+    },
+    body: JSON.stringify({ viewKey: big }),
+  })
+  expect(res.status).toBe(413)
 })

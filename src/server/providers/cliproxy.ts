@@ -36,6 +36,11 @@ type FilteredAccount = {
   idToken?: { chatgpt_account_id?: string; plan_type?: string }
 }
 
+// Structured error kind from apiCall, used for fast-fail + retryable classification
+type ErrorKind = "mgmt-auth" | "mgmt-not-found" | "transport" | "upstream-auth" | "upstream-rate-limit" | "upstream-error" | "parse-error" | "no-data" | "unknown"
+
+type AccountQueryResult = { metrics: NormalizedMetric[]; error?: string; errorKind?: ErrorKind; retryable?: boolean }
+
 export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): ProviderAdapter {
   return {
     type: "cliproxy",
@@ -107,62 +112,103 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       const metrics: NormalizedMetric[] = []
       const dynamicSubscriptions: DynamicSubscription[] = []
       const adapterErrors: Array<{ message: string; retryable: boolean }> = []
+      let aborted = false // tracks whether fast-fail or deadline caused early exit
 
       for (let i = 0; i < accounts.length; i += API_CALL_CONCURRENCY) {
-        if (Date.now() >= deadline) break
+        if (Date.now() >= deadline) {
+          // Deadline hit: process remaining accounts as error metrics so they
+          // stay visible (not silently dropped). Mark as aborted so we don't
+          // return dynamicSubscriptions (coalesce will preserve last-good).
+          aborted = true
+          for (const acct of accounts.slice(i)) {
+            const errorMetric = makeErrorMetric(acct.provider, acct.authIndex, "refresh deadline exceeded")
+            metrics.push(errorMetric)
+            dynamicSubscriptions.push(makeDynSub(acct, [errorMetric.providerMetricId]))
+            adapterErrors.push({ message: `${acct.provider}:${acct.authIndex}: refresh deadline exceeded`, retryable: true })
+          }
+          break
+        }
+
         const batch = accounts.slice(i, i + API_CALL_CONCURRENCY)
         const results = await Promise.allSettled(
           batch.map((acct) => queryAccountWithTimeout(fetchImpl, baseUrl, apiKey, acct, deadlineController.signal)),
         )
 
-        // Fast-fail: if entire batch returned auth errors, abort remaining
-        const batchResults = results.map(r => r.status === "fulfilled" ? r.value : { metrics: [] as NormalizedMetric[], error: "request failed" })
-        const allAuthFailed = batchResults.every(r =>
-          r.error !== undefined && (r.error.includes("auth") || r.error.includes("authentication"))
+        // Process batch results FIRST (before any fast-fail decision)
+        const batchResults: AccountQueryResult[] = results.map(r =>
+          r.status === "fulfilled" ? r.value : { metrics: [], error: "request failed", errorKind: "transport", retryable: true }
         )
-        if (allAuthFailed && i + API_CALL_CONCURRENCY < accounts.length) {
-          adapterErrors.push({ message: "All api-call requests in batch failed authentication; aborting remaining", retryable: false })
-          break
-        }
 
         for (let j = 0; j < batchResults.length; j++) {
           const acct = batch[j]!
           const r = batchResults[j]!
-          const accountMetrics: NormalizedMetric[] = []
-          accountMetrics.push(...r.metrics)
+          const accountMetrics: NormalizedMetric[] = [...r.metrics]
           if (r.error) {
             const errorMetric = makeErrorMetric(acct.provider, acct.authIndex, r.error)
             accountMetrics.push(errorMetric)
-            // Push to adapter errors for subscription badge escalation
-            adapterErrors.push({ message: `${acct.provider}:${acct.authIndex}: ${r.error}`, retryable: !r.error.includes("auth") })
+            // Use structured retryable from apiCall (not string guessing)
+            const isRetryable = r.retryable ?? !isAuthErrorKind(r.errorKind)
+            adapterErrors.push({ message: `${acct.provider}:${acct.authIndex}: ${r.error}`, retryable: isRetryable })
           }
           metrics.push(...accountMetrics)
-          dynamicSubscriptions.push({
-            id: `cliproxy:${acct.provider}:${acct.authIndex}`,
-            name: acct.label ? `CLIProxy - ${acct.label}` : `CLIProxy - ${acct.provider} #${acct.authIndex.slice(0, 8)}`,
-            providerMetricIds: accountMetrics.map(m => m.providerMetricId),
-            ui: { group: "CLIProxy" },
-          })
+          dynamicSubscriptions.push(makeDynSub(acct, accountMetrics.map(m => m.providerMetricId)))
+        }
+
+        // Fast-fail: if entire batch had management-auth errors, abort remaining.
+        // Uses structured errorKind (not string matching).
+        const allMgmtAuthFailed = batchResults.every(r => r.errorKind === "mgmt-auth" || r.errorKind === "mgmt-not-found")
+        if (allMgmtAuthFailed && i + API_CALL_CONCURRENCY < accounts.length) {
+          aborted = true
+          adapterErrors.push({ message: "All api-call requests in batch failed management authentication; aborting remaining", retryable: false })
+          // Process remaining accounts as error metrics so they stay visible
+          for (const acct of accounts.slice(i + API_CALL_CONCURRENCY)) {
+            const errorMetric = makeErrorMetric(acct.provider, acct.authIndex, "skipped: batch auth failure")
+            metrics.push(errorMetric)
+            dynamicSubscriptions.push(makeDynSub(acct, [errorMetric.providerMetricId]))
+            adapterErrors.push({ message: `${acct.provider}:${acct.authIndex}: skipped (batch auth failure)`, retryable: false })
+          }
+          break
         }
       }
 
       clearTimeout(deadlineTimer)
+
+      // If aborted (fast-fail or deadline), do NOT return dynamicSubscriptions
+      // so coalesce preserves the last-known-good list in storage.
+      // The error metrics + subscriptions are still in metrics[] for this refresh
+      // cycle (visible immediately), but storage won't overwrite the good list.
+      if (aborted) {
+        return { ...base, metrics, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}) }
+      }
+
       return { ...base, metrics, dynamicSubscriptions, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}) }
     },
   }
 }
 
-type AccountQueryResult = { metrics: NormalizedMetric[]; error?: string }
+function makeDynSub(acct: FilteredAccount, providerMetricIds: string[]): DynamicSubscription {
+  return {
+    id: `cliproxy:${acct.provider}:${acct.authIndex}`,
+    name: acct.label ? `CLIProxy - ${acct.label}` : `CLIProxy - ${acct.provider} #${acct.authIndex.slice(0, 8)}`,
+    providerMetricIds,
+    ui: { group: "CLIProxy" },
+  }
+}
+
+function isAuthErrorKind(kind: ErrorKind | undefined): boolean {
+  return kind === "mgmt-auth" || kind === "mgmt-not-found" || kind === "upstream-auth"
+}
 
 async function queryAccountWithTimeout(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, acct: FilteredAccount, parentSignal: AbortSignal,
 ): Promise<AccountQueryResult> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PER_CALL_TIMEOUT_MS)
-  // Link to parent deadline
   parentSignal.addEventListener("abort", () => controller.abort(), { once: true })
   try {
     return await queryAccount(fetchImpl, baseUrl, mgmtKey, acct, controller.signal)
+  } catch {
+    return { metrics: [], error: "request timeout or abort", errorKind: "transport", retryable: true }
   } finally {
     clearTimeout(timer)
   }
@@ -178,14 +224,18 @@ async function queryAccount(
   } else if (acct.provider === "xai") {
     return queryXai(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal)
   }
-  return { metrics: [], error: `unknown provider: ${acct.provider}` }
+  return { metrics: [], error: `unknown provider: ${acct.provider}`, errorKind: "unknown", retryable: false }
 }
+
+type ApiCallResult =
+  | { ok: true; statusCode: number; body: string }
+  | { ok: false; error: string; errorKind: ErrorKind; retryable: boolean }
 
 async function apiCall(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string,
   authIndex: string, method: string, url: string, headers: Record<string, string>,
   signal: AbortSignal,
-): Promise<{ ok: true; statusCode: number; body: string } | { ok: false; error: string; retryable: boolean }> {
+): Promise<ApiCallResult> {
   let res: Response
   try {
     res = await fetchImpl(`${baseUrl}/v0/management/api-call`, {
@@ -195,27 +245,32 @@ async function apiCall(
       signal,
     })
   } catch {
-    return { ok: false, error: "network error", retryable: true }
+    return { ok: false, error: "network error", errorKind: "transport", retryable: true }
   }
   // Management API HTTP status determines error type
   if (res.status === 502) {
-    return { ok: false, error: "api-call transport failure", retryable: true }
+    return { ok: false, error: "api-call transport failure", errorKind: "transport", retryable: true }
   }
   if (res.status === 400) {
     const body = await res.json().catch(() => ({})) as { error?: string }
     const raw = body.error ?? "api-call bad request"
-    // A 400 'auth token not found' means the CLIProxyAPI server no longer has
-    // a valid token for this auth_index (user logged out or token expired).
-    // Surface this as a stale-auth_index hint so the UI can badge it.
     const hint = raw.toLowerCase().includes("auth token") ? " (stale auth_index)" : ""
-    return { ok: false, error: `${raw}${hint}`, retryable: false }
+    return { ok: false, error: `${raw}${hint}`, errorKind: "mgmt-not-found", retryable: false }
+  }
+  if (res.status === 401 || res.status === 403) {
+    return { ok: false, error: "management API authentication failed", errorKind: "mgmt-auth", retryable: false }
   }
   if (!res.ok) {
-    return { ok: false, error: `api-call failed (${res.status})`, retryable: isRetryableStatus(res.status) }
+    return { ok: false, error: `api-call failed (${res.status})`, errorKind: "unknown", retryable: isRetryableStatus(res.status) }
   }
-  const body = await res.json() as { status_code?: number; body?: string; error?: string }
+  let body: { status_code?: number; body?: string; error?: string }
+  try {
+    body = await res.json() as { status_code?: number; body?: string; error?: string }
+  } catch {
+    return { ok: false, error: "management API returned non-JSON", errorKind: "parse-error", retryable: false }
+  }
   if (body.error !== undefined) {
-    return { ok: false, error: body.error, retryable: false }
+    return { ok: false, error: body.error, errorKind: "unknown", retryable: false }
   }
   return { ok: true, statusCode: body.status_code ?? 0, body: body.body ?? "" }
 }
@@ -232,20 +287,10 @@ async function queryCodex(
 
   const result = await apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
     "https://chatgpt.com/backend-api/wham/usage", headers, signal)
-  if (!result.ok) return { metrics: [], error: result.error }
+  if (!result.ok) return { metrics: [], error: result.error, errorKind: result.errorKind, retryable: result.retryable }
 
-  if (result.statusCode === 401 || result.statusCode === 403) {
-    return { metrics: [], error: "upstream auth failed (possible stale auth_index)" }
-  }
-  if (result.statusCode === 429) {
-    return { metrics: [], error: "upstream rate limited (429)" }
-  }
-  if (result.statusCode >= 500) {
-    return { metrics: [], error: `upstream error (${result.statusCode})` }
-  }
-  if (result.statusCode < 200 || result.statusCode >= 300) {
-    return { metrics: [], error: `upstream error (${result.statusCode})` }
-  }
+  const upstreamErr = classifyUpstreamStatus(result.statusCode)
+  if (upstreamErr) return upstreamErr
 
   try {
     const parsed = JSON.parse(result.body) as {
@@ -259,16 +304,14 @@ async function queryCodex(
       const limitWindowSeconds = parseNumber(window.limit_window_seconds)
       if (used === undefined || limitWindowSeconds === undefined) continue
 
-      // Classify by limit_window_seconds (NOT hardcoded primary/secondary)
       let name: string
       let duration: string
       if (limitWindowSeconds === 18000) { name = "five_hour"; duration = "5h" }
       else if (limitWindowSeconds === 604800) { name = "weekly"; duration = "7d" }
       else if (limitWindowSeconds === 2592000) { name = "monthly"; duration = "30d" }
-      else continue // unknown window size -> skip
+      else continue
 
-      // reset_at is Unix epoch seconds (NOT ISO string)
-      const resetAt = typeof window.reset_at === "number"
+      const resetAt = typeof window.reset_at === "number" && window.reset_at > 0
         ? new Date(window.reset_at * 1000).toISOString()
         : undefined
 
@@ -283,9 +326,10 @@ async function queryCodex(
         ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration, resetAt } } : {}),
       })
     }
+    if (metrics.length === 0) return { metrics: [], error: "no quota windows parsed", errorKind: "no-data", retryable: false }
     return { metrics }
   } catch {
-    return { metrics: [], error: "parse error" }
+    return { metrics: [], error: "parse error", errorKind: "parse-error", retryable: false }
   }
 }
 
@@ -300,20 +344,10 @@ async function queryClaude(
 
   const result = await apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
     "https://api.anthropic.com/api/oauth/usage", headers, signal)
-  if (!result.ok) return { metrics: [], error: result.error }
+  if (!result.ok) return { metrics: [], error: result.error, errorKind: result.errorKind, retryable: result.retryable }
 
-  if (result.statusCode === 401 || result.statusCode === 403) {
-    return { metrics: [], error: "upstream auth failed (possible stale auth_index)" }
-  }
-  if (result.statusCode === 429) {
-    return { metrics: [], error: "upstream rate limited (429)" }
-  }
-  if (result.statusCode >= 500) {
-    return { metrics: [], error: `upstream error (${result.statusCode})` }
-  }
-  if (result.statusCode < 200 || result.statusCode >= 300) {
-    return { metrics: [], error: `upstream error (${result.statusCode})` }
-  }
+  const upstreamErr = classifyUpstreamStatus(result.statusCode)
+  if (upstreamErr) return upstreamErr
 
   try {
     const parsed = JSON.parse(result.body) as Record<string, unknown>
@@ -324,7 +358,6 @@ async function queryClaude(
       const win = value as { utilization?: unknown; resets_at?: unknown }
       const used = parseNumber(win.utilization)
       if (used === undefined) continue
-      // utilization is 0-100, used directly (do NOT multiply by 100)
       const resetAt = typeof win.resets_at === "string" ? win.resets_at : undefined
       const duration = key.startsWith("five_hour") ? "5h" : "7d"
       metrics.push({
@@ -338,9 +371,10 @@ async function queryClaude(
         ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration, resetAt } } : {}),
       })
     }
+    if (metrics.length === 0) return { metrics: [], error: "no quota windows parsed", errorKind: "no-data", retryable: false }
     return { metrics }
   } catch {
-    return { metrics: [], error: "parse error" }
+    return { metrics: [], error: "parse error", errorKind: "parse-error", retryable: false }
   }
 }
 
@@ -355,13 +389,28 @@ async function queryXai(
     "Accept": "*/*",
   }
 
-  // Query both weekly and monthly endpoints, merge results
   const [weeklyResult, monthlyResult] = await Promise.all([
     apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
       "https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers, signal),
     apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
       "https://cli-chat-proxy.grok.com/v1/billing", headers, signal),
   ])
+
+  // Check for upstream auth errors (I2 fix: xai now classifies 401/403)
+  if (!weeklyResult.ok && weeklyResult.errorKind === "mgmt-auth") {
+    return { metrics: [], error: weeklyResult.error, errorKind: weeklyResult.errorKind, retryable: weeklyResult.retryable }
+  }
+  if (!monthlyResult.ok && monthlyResult.errorKind === "mgmt-auth") {
+    return { metrics: [], error: monthlyResult.error, errorKind: monthlyResult.errorKind, retryable: monthlyResult.retryable }
+  }
+
+  // Check upstream status codes for auth errors
+  if (weeklyResult.ok && (weeklyResult.statusCode === 401 || weeklyResult.statusCode === 403)) {
+    return { metrics: [], error: "upstream auth failed (possible stale auth_index)", errorKind: "upstream-auth", retryable: false }
+  }
+  if (monthlyResult.ok && (monthlyResult.statusCode === 401 || monthlyResult.statusCode === 403)) {
+    return { metrics: [], error: "upstream auth failed (possible stale auth_index)", errorKind: "upstream-auth", retryable: false }
+  }
 
   const metrics: NormalizedMetric[] = []
   let weeklyConfig: Record<string, unknown> | undefined
@@ -380,16 +429,20 @@ async function queryXai(
     } catch { /* handled below */ }
   }
 
-  // Weekly data from weekly endpoint
   const config = weeklyConfig ?? monthlyConfig
   if (!config) {
     const err = !weeklyResult.ok ? weeklyResult.error
       : !monthlyResult.ok ? monthlyResult.error
       : "no billing data"
-    return { metrics: [], error: err }
+    const kind = !weeklyResult.ok ? weeklyResult.errorKind
+      : !monthlyResult.ok ? monthlyResult.errorKind
+      : "no-data" as ErrorKind
+    const retryable = !weeklyResult.ok ? weeklyResult.retryable
+      : !monthlyResult.ok ? monthlyResult.retryable
+      : false
+    return { metrics: [], error: err, errorKind: kind, retryable }
   }
 
-  // Weekly: credit_usage_percent
   const weeklyUsed = parseNumber(config["credit_usage_percent"])
   if (weeklyUsed !== undefined) {
     const period = config["current_period"] as Record<string, unknown> | undefined
@@ -406,7 +459,6 @@ async function queryXai(
     })
   }
 
-  // Monthly: merge from monthlyConfig if available, fallback to weekly config
   const monthlyCfg = monthlyConfig ?? config
   const monthlyLimit = readXaiCents(monthlyCfg, "monthly_limit", "monthlyLimit")
   const used = readXaiCents(monthlyCfg, "used")
@@ -415,7 +467,6 @@ async function queryXai(
   const billingPeriodEnd = typeof monthlyCfg["billing_period_end"] === "string" ? monthlyCfg["billing_period_end"] as string : undefined
 
   if (monthlyLimit !== undefined && monthlyLimit > 0 && used !== undefined) {
-    // NO Math.min cap -- overage >100% is meaningful
     const monthlyUsedPercent = (used / monthlyLimit) * 100
     metrics.push({
       providerMetricId: `xai:${authIndex}:monthly`,
@@ -443,9 +494,26 @@ async function queryXai(
   }
 
   if (metrics.length === 0) {
-    return { metrics: [], error: "no billing data parsed" }
+    return { metrics: [], error: "no billing data parsed", errorKind: "no-data", retryable: false }
   }
   return { metrics }
+}
+
+// Shared upstream status classifier for Codex and Claude (and now xai via inline check)
+function classifyUpstreamStatus(statusCode: number): AccountQueryResult | null {
+  if (statusCode === 401 || statusCode === 403) {
+    return { metrics: [], error: "upstream auth failed (possible stale auth_index)", errorKind: "upstream-auth", retryable: false }
+  }
+  if (statusCode === 429) {
+    return { metrics: [], error: "upstream rate limited (429)", errorKind: "upstream-rate-limit", retryable: true }
+  }
+  if (statusCode >= 500) {
+    return { metrics: [], error: `upstream error (${statusCode})`, errorKind: "upstream-error", retryable: true }
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    return { metrics: [], error: `upstream error (${statusCode})`, errorKind: "upstream-error", retryable: false }
+  }
+  return null
 }
 
 function readXaiCents(obj: Record<string, unknown>, ...keys: string[]): number | undefined {
@@ -453,9 +521,25 @@ function readXaiCents(obj: Record<string, unknown>, ...keys: string[]): number |
     const val = obj[key]
     if (val === undefined) continue
     if (typeof val === "number") return val
+    if (typeof val === "string") {
+      const n = Number(val)
+      if (Number.isFinite(n)) return n
+    }
     if (typeof val === "object" && val !== null) {
-      const v = (val as Record<string, unknown>)["val"]
+      const obj2 = val as Record<string, unknown>
+      const v = obj2["val"]
       if (typeof v === "number") return v
+      if (typeof v === "string") {
+        const n = Number(v)
+        if (Number.isFinite(n)) return n
+      }
+      // Also try {value: N} form
+      const v2 = obj2["value"]
+      if (typeof v2 === "number") return v2
+      if (typeof v2 === "string") {
+        const n = Number(v2)
+        if (Number.isFinite(n)) return n
+      }
     }
   }
   return undefined

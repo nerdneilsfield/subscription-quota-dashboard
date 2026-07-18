@@ -173,7 +173,14 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     const tracked = promise.then(async (outcome): Promise<AccountRefreshOutcome & { result?: ProviderRefreshResult; error?: string }> => {
       if (outcome.ok && outcome.fresh) {
         // Persist the fresh result inside a transaction.
-        writeProviderResult(paId, outcome.result, allMetrics)
+        try {
+          writeProviderResult(paId, outcome.result, allMetrics)
+        } catch (writeErr) {
+          // Storage write failure must not crash the refresh scheduler.
+          const msg = writeErr instanceof Error ? writeErr.message : "storage write failed"
+          console.error(`writeProviderResult failed for ${paId}: ${msg}`)
+          return { ok: false, error: msg }
+        }
       }
       return outcome
     })
@@ -275,14 +282,32 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     }
 
     const cacheStatus: ProviderCacheRecord["status"] = "ok"
+
+    // C3 fix: When the adapter returned zero metrics AND has errors (failure path),
+    // preserve the last-known-good normalized metrics so dynamic subscription
+    // cards don't disappear. The coalesce on dynamic_subscriptions_json already
+    // preserves the subscription list; this extends the same semantics to metrics.
+    let normalizedForCache = result.metrics as Array<Record<string, unknown>>
+    let dynamicSubsForCache = result.dynamicSubscriptions
+    if (result.metrics.length === 0 && (result.errors ?? []).length > 0) {
+      // Adapter failure: preserve old metrics + old dynamicSubscriptions
+      const existing = storage.providerCache.get(paId)
+      if (existing) {
+        normalizedForCache = existing.normalized.metrics
+        if (dynamicSubsForCache === undefined && existing.dynamicSubscriptions !== undefined) {
+          dynamicSubsForCache = existing.dynamicSubscriptions
+        }
+      }
+    }
+
     const cacheRecord: ProviderCacheRecord = {
       providerAccountId: paId,
       fetchedAt: result.fetchedAt,
       staleAfter: result.staleAfter,
       status: cacheStatus,
-      normalized: { metrics: result.metrics as Array<Record<string, unknown>> },
+      normalized: { metrics: normalizedForCache },
       errors: result.errors ?? [],
-      ...(result.dynamicSubscriptions !== undefined ? { dynamicSubscriptions: result.dynamicSubscriptions } : {}),
+      ...(dynamicSubsForCache !== undefined ? { dynamicSubscriptions: dynamicSubsForCache } : {}),
     }
 
     storage.transaction(() => {

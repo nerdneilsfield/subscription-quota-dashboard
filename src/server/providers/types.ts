@@ -56,6 +56,11 @@ export type ProviderRefreshResult = {
   nextImportState?: { maxCreationTime?: number; importedQueryIdsAtMaxCreationTime: string[] }
   errors?: Array<{ message: string; retryable: boolean }>
   dynamicSubscriptions?: DynamicSubscription[]
+  // Metric IDs from the PREVIOUS cache that should be preserved this cycle
+  // because the adapter couldn't refresh them (partial failure). When present,
+  // the refresh service preserves these specific IDs from the old cache
+  // instead of guessing based on subscription presence.
+  preserveMetricIds?: string[]
 }
 
 export type ProviderAdapter = {

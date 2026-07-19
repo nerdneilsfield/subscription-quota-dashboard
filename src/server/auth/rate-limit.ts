@@ -29,34 +29,44 @@ export function createRateLimiter(options: RateLimiterOptions = {}): RateLimiter
     return i === 0 ? times : times.slice(i)
   }
 
-  // Evict expired keys to prevent unbounded Map growth.
-  function evictExpired(t: number): void {
-    if (buckets.size < maxKeys) return
-    for (const [key, times] of buckets) {
+  // Evict expired keys to prevent unbounded Map growth. If the Map is still
+  // at capacity after eviction, fall back to a shared "overflow" bucket so
+  // new keys don't increase memory usage (they share the overflow entry).
+  const OVERFLOW_KEY = "__overflow__"
+  function evictOrOverflow(t: number, key: string): string {
+    if (buckets.size < maxKeys) return key
+    // Try evicting expired keys first.
+    let evicted = 0
+    for (const [k, times] of buckets) {
       const pruned = prune(times, t)
       if (pruned.length === 0) {
-        buckets.delete(key)
+        buckets.delete(k)
+        evicted++
       } else {
-        buckets.set(key, pruned)
+        buckets.set(k, pruned)
       }
     }
+    if (buckets.size < maxKeys) return key
+    // Still full: route to overflow bucket to prevent unbounded growth.
+    return OVERFLOW_KEY
   }
 
   return {
     check(key: string): boolean {
       const t = now()
-      evictExpired(t)
-      const times = prune(buckets.get(key) ?? [], t)
+      const effectiveKey = evictOrOverflow(t, key)
+      const times = prune(buckets.get(effectiveKey) ?? [], t)
       if (times.length >= maxAttempts) {
-        buckets.set(key, times)
+        buckets.set(effectiveKey, times)
         return false
       }
       times.push(t)
-      buckets.set(key, times)
+      buckets.set(effectiveKey, times)
       return true
     },
     reset(key: string): void {
       buckets.delete(key)
+      buckets.delete(OVERFLOW_KEY)
     },
     count(key: string): number {
       const t = now()

@@ -113,6 +113,9 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       const metrics: NormalizedMetric[] = []
       const dynamicSubscriptions: DynamicSubscription[] = []
       const adapterErrors: Array<{ message: string; retryable: boolean }> = []
+      // Track which subscriptions had errors this cycle so the refresh service
+      // knows to preserve their old quota metrics from the cache.
+      const failedSubscriptionIds: string[] = []
       let aborted = false // tracks whether fast-fail or deadline caused early exit
 
       for (let i = 0; i < accounts.length; i += API_CALL_CONCURRENCY) {
@@ -144,8 +147,9 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
           const acct = batch[j]!
           const r = batchResults[j]!
           const accountMetrics: NormalizedMetric[] = [...r.metrics]
-          if (r.error) {
-            const errorMetric = makeErrorMetric(acct.provider, acct.authIndex, r.error)
+          const hasError = !!r.error
+          if (hasError) {
+            const errorMetric = makeErrorMetric(acct.provider, acct.authIndex, r.error!)
             accountMetrics.push(errorMetric)
             // Use structured retryable from apiCall (not string guessing)
             const isRetryable = r.retryable ?? !isAuthErrorKind(r.errorKind)
@@ -153,6 +157,17 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
           }
           metrics.push(...accountMetrics)
           dynamicSubscriptions.push(makeDynSub(acct, accountMetrics.map(m => m.providerMetricId)))
+          // If this account had an error but previously had quota metrics,
+          // mark the old quota metric IDs for preservation so the refresh
+          // service doesn't drop them. Only the real metrics (not the error
+          // metric) need preservation - the error metric is new this cycle.
+          if (hasError) {
+            // The old metric IDs follow the pattern: provider:authIndex:metricName
+            // We don't know exact names, but the refresh service will match by
+            // subscription id + any old IDs not in the new set.
+            // Signal preservation by recording the subscription as "failed".
+            failedSubscriptionIds.push(`cliproxy:${acct.provider}:${acct.authIndex}`)
+          }
         }
 
         // Fast-fail: only abort remaining accounts when the management API
@@ -169,6 +184,7 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
             metrics.push(errorMetric)
             dynamicSubscriptions.push(makeDynSub(acct, [errorMetric.providerMetricId]))
             adapterErrors.push({ message: `${acct.provider}:${acct.authIndex}: skipped (batch auth failure)`, retryable: false })
+            failedSubscriptionIds.push(`cliproxy:${acct.provider}:${acct.authIndex}`)
           }
           break
         }
@@ -184,7 +200,12 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
         return { ...base, metrics, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}) }
       }
 
-      return { ...base, metrics, dynamicSubscriptions, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}) }
+      // Collect preserveMetricIds: for failed subscriptions, signal the
+      // refresh service to preserve old metrics (excluding the error metric)
+      // from the previous cache.
+      const preserveMetricIds = failedSubscriptionIds.length > 0 ? failedSubscriptionIds : undefined
+      return { ...base, metrics, dynamicSubscriptions, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}),
+        ...(preserveMetricIds !== undefined ? { preserveMetricIds } : {}) }
     },
   }
 }
@@ -602,7 +623,16 @@ async function queryXai(
     return { metrics: [], error: "no billing data parsed", errorKind: "no-data", retryable: false }
   }
   if (partialWarnings.length > 0) {
-    return { metrics, error: partialWarnings.join("; "), errorKind: "unknown", retryable: true }
+    // Propagate the actual failure's errorKind/retryable from whichever
+    // endpoint failed. Parse-error/no-data should be retryable:false, while
+    // upstream-error/transport should be retryable:true.
+    const failedKind = weeklyFailed ? weeklyErrKind
+      : monthlyFailed ? monthlyErrKind
+      : "unknown"
+    const failedRetryable = weeklyFailed ? weeklyRetryable
+      : monthlyFailed ? monthlyRetryable
+      : true
+    return { metrics, error: partialWarnings.join("; "), errorKind: failedKind, retryable: failedRetryable }
   }
   return { metrics }
 }

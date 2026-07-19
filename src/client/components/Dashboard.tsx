@@ -122,15 +122,22 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
     const isFirst = !initRef.current
     initRef.current = true
     if (isFirst && initialPayload) {
-      setPayload(initialPayload)
-      setPhase("ready")
-      return
+      // Validate that the initialPayload matches the current profile and range.
+      // If it doesn't (e.g. AuthGate captured an old range before auth), fetch fresh.
+      const profileMatch = initialPayload.profile?.id === profileId
+      const rangeMatch = initialPayload.selectedRange === range
+      if (profileMatch && rangeMatch) {
+        setPayload(initialPayload)
+        setPhase("ready")
+        return
+      }
+      // Mismatch: fall through to fetch
     }
     void fetchRange(range, isFirst ? "initial" : "range")
     return () => {
       abortRef.current?.abort()
     }
-  }, [range, initialPayload, fetchRange])
+  }, [range, initialPayload, fetchRange, profileId])
 
   // visibility refetch (no auto-poll)
   useEffect(() => {

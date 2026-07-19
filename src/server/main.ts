@@ -34,17 +34,28 @@ const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES)
 // The public-facing origin for same-origin Origin checks. Set this when
 // behind an HTTPS-terminating reverse proxy, e.g. https://dashboard.example.com.
 // Canonicalized via new URL().origin so trailing slashes/path/query/hash are stripped.
+// Only http: and https: schemes are accepted; opaque origins (file:, etc.) are rejected.
 const publicOrigin = (() => {
   const raw = process.env.PUBLIC_ORIGIN
   if (!raw) return undefined
   try {
     const parsed = new URL(raw)
+    // Reject non-HTTP schemes and opaque origins
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      console.error(`PUBLIC_ORIGIN must be http: or https: URL, got: ${parsed.protocol}`)
+      process.exit(1)
+    }
+    const origin = parsed.origin
+    if (origin === "null") {
+      console.error(`PUBLIC_ORIGIN resolved to opaque origin: ${raw}`)
+      process.exit(1)
+    }
     // Reject credentials in the origin
     if (parsed.username || parsed.password) {
       console.error(`PUBLIC_ORIGIN must not contain credentials: ${raw}`)
       process.exit(1)
     }
-    return parsed.origin
+    return origin
   } catch {
     console.error(`PUBLIC_ORIGIN is not a valid URL: ${raw}`)
     process.exit(1)

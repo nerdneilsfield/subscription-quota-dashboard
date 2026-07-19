@@ -323,26 +323,32 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       }
     } else if ((result.errors ?? []).length > 0 && result.metrics.length > 0) {
       // Partial failure: merge returned metrics into last-known-good.
-      // Precision: only preserve old metrics for providerMetricIds that
-      // correspond to subscriptions the adapter DIDN'T return this cycle.
-      // Successfully-refreshed subscriptions use only their new IDs.
+      // Use the adapter's explicit preserveMetricIds (subscription IDs whose
+      // old metrics should be preserved) if available. Otherwise fall back
+      // to inference: preserve old metrics for subscriptions not returned.
       const existing = storage.providerCache.get(paId)
       if (existing) {
-        // Build set of providerMetricIds the adapter returned this cycle.
         const returnedIds = new Set(result.metrics.map((m) => (m as NormalizedMetric).providerMetricId))
-        // Build set of IDs that were in the adapter's dynamicSubscriptions this cycle.
-        const currentSubIds = result.dynamicSubscriptions
-          ? new Set(result.dynamicSubscriptions.flatMap((ds) => ds.providerMetricIds))
-          : returnedIds
 
-        // Merge metrics: replace returned ones, preserve old ones only if
-        // they belong to a subscription NOT present in this cycle's output.
+        // If adapter provided preserveMetricIds (subscription IDs), preserve
+        // old metrics belonging to those subscriptions. Otherwise, preserve
+        // old metrics for subscriptions NOT returned this cycle.
+        const failedSubIds = result.preserveMetricIds
+          ? new Set(result.preserveMetricIds)
+          : null
+
         const oldIdsToPreserve = new Set<string>()
         if (existing.dynamicSubscriptions) {
           for (const oldDs of existing.dynamicSubscriptions) {
-            // If this subscription was NOT returned this cycle, preserve its metrics.
-            const wasReturned = result.dynamicSubscriptions?.some((nds) => nds.id === oldDs.id) ?? false
-            if (!wasReturned) {
+            let shouldPreserve: boolean
+            if (failedSubIds !== null) {
+              // Explicit: preserve only if this sub ID is in the failed set.
+              shouldPreserve = failedSubIds.has(oldDs.id)
+            } else {
+              // Inference: preserve if this sub was NOT returned this cycle.
+              shouldPreserve = !result.dynamicSubscriptions?.some((nds) => nds.id === oldDs.id)
+            }
+            if (shouldPreserve) {
               for (const id of oldDs.providerMetricIds) oldIdsToPreserve.add(id)
             }
           }
@@ -350,22 +356,19 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
 
         const merged = existing.normalized.metrics.filter((oldMetric) => {
           const old = oldMetric as NormalizedMetric
-          // Keep old metric if it's NOT being replaced AND it's from a
-          // subscription not returned this cycle.
           return !returnedIds.has(old.providerMetricId) && oldIdsToPreserve.has(old.providerMetricId)
         })
-        // Add all fresh metrics
         merged.push(...(result.metrics as Array<Record<string, unknown>>))
         normalizedForCache = merged
 
-        // dynamicSubscriptions: use this cycle's subscriptions verbatim.
-        // Old subscriptions for accounts not returned are preserved (coalesce
-        // already handles this, but be explicit for partial case).
-        if (result.dynamicSubscriptions !== undefined && existing.dynamicSubscriptions !== undefined) {
-          const newSubIds = new Set(result.dynamicSubscriptions.map((ds) => ds.id))
-          const preservedOldSubs = existing.dynamicSubscriptions.filter((ds) => !newSubIds.has(ds.id))
-          dynamicSubsForCache = [...result.dynamicSubscriptions, ...preservedOldSubs]
-        }
+        // dynamicSubscriptions: if discovery succeeded (not aborted), the
+        // current cycle's subscriptions are authoritative. Old subscriptions
+        // not returned this cycle were likely deleted/disabled/filtered and
+        // should NOT be revived. Only preserve old subs if discovery itself
+        // failed (result.dynamicSubscriptions === undefined, handled by coalesce).
+        // -> Use result.dynamicSubscriptions verbatim (it's defined here since
+        //    we're in the partial branch where metrics > 0 + errors > 0).
+        dynamicSubsForCache = result.dynamicSubscriptions
       }
     }
 

@@ -82,8 +82,10 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
         setAuth("expired")
         setFormError("Session expired. Enter your view key again.")
       } else {
-        setSessionError(dash.message)
+        // Dashboard GET failed (network/server error): show the error on the
+        // form so the user can retry, instead of silently going to unauthenticated.
         setAuth("unauthenticated")
+        setFormError(dash.message || "Failed to load dashboard after login. Please try again.")
       }
       return
     }

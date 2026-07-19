@@ -104,6 +104,9 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
       if (curRefreshState === "refreshing" || curRefreshState === "updated" || curRefreshState === "rate-limited") {
         setRefresh({ state: "idle" })
       }
+      // Clear rangeLoading from a previous operation (prevents stuck skeleton
+      // when a silent fetch takes over a pending range fetch).
+      if (rangeLoadingRef.current) setRangeLoading(false)
       if (mode === "initial") setPhase("loading")
       else if (mode === "range") setRangeLoading(true)
       const res = await getDashboard(profileId, nextRange, ctrl.signal)

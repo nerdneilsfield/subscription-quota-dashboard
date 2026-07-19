@@ -20,14 +20,17 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
   const [formError, setFormError] = useState<string | undefined>()
   const [sessionError, setSessionError] = useState<string | undefined>()
   const [viewKey, setViewKey] = useState("")
+  // Bumped on each retry to force the session-check effect to re-run even
+  // when auth is already "checking-session" (retry sets the same value).
+  const [retryNonce, setRetryNonce] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const sessionCtrlRef = useRef<AbortController | null>(null)
 
   // checking-session: one getDashboard with existing cookies.
-  // Component remounts on profileId change (via key={profileId} in App.tsx),
-  // so [profileId] deps = runs once per profile mount. Range is captured from
-  // the initial render closure; range changes after auth are handled by
-  // Dashboard's own fetchRange effect.
+  // Component remounts on profileId change (via key={profileId} in App.tsx).
+  // Range is in deps so that switching range during the auth probe re-fetches
+  // with the correct range (the old response is aborted via cleanup).
+  // retryNonce forces re-run when retrySession sets auth to the same value.
   useEffect(() => {
     // Only run the session check when in checking-session state.
     if (auth !== "checking-session") return
@@ -51,11 +54,12 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
       ctrl.abort()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileId, auth])
+  }, [profileId, auth, range, retryNonce])
 
   const retrySession = () => {
     setSessionError(undefined)
     setAuth("checking-session")
+    setRetryNonce((n) => n + 1)
   }
 
   const onSubmit = async (e: React.FormEvent) => {

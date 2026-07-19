@@ -316,18 +316,18 @@ async function queryCodex(
       else if (limitWindowSeconds === 604800) { name = "weekly"; duration = "7d" }
       else if (limitWindowSeconds === 2592000) { name = "monthly"; duration = "30d" }
       else {
-        // Unknown window (e.g. daily, hourly): produce a generic metric so
-        // the data isn't silently dropped. Use exact units when divisible;
-        // otherwise label with seconds to avoid misleading approximations.
+        // Unknown window: produce a generic metric so the data isn't silently
+        // dropped. Use exact units when divisible by m/h/d; otherwise use
+        // minutes (rounded up to avoid 0) to stay within the duration domain
+        // (shared validators accept m/h/d only).
         name = `window_${limitWindowSeconds}`
         if (limitWindowSeconds >= 86400 && limitWindowSeconds % 86400 === 0) {
           duration = `${limitWindowSeconds / 86400}d`
         } else if (limitWindowSeconds >= 3600 && limitWindowSeconds % 3600 === 0) {
           duration = `${limitWindowSeconds / 3600}h`
-        } else if (limitWindowSeconds >= 60 && limitWindowSeconds % 60 === 0) {
-          duration = `${limitWindowSeconds / 60}m`
         } else {
-          duration = `${limitWindowSeconds}s`
+          const minutes = Math.max(1, Math.ceil(limitWindowSeconds / 60))
+          duration = `${minutes}m`
         }
       }
 
@@ -440,31 +440,46 @@ async function queryXai(
 
   // Track per-endpoint failure state for partial detection.
   // An endpoint "fails" if: apiCall returned !ok, OR the upstream status_code
-  // is non-2xx (the management API wraps upstream status in status_code).
+  // is non-2xx (the management API wraps upstream status in status_code),
+  // OR the body can't be parsed / has no config.
+  // Each failure carries its own errorKind/retryable so parse/no-data failures
+  // are NOT incorrectly marked retryable.
   let weeklyFailed = false
   let weeklyErr = ""
+  let weeklyErrKind: ErrorKind = "unknown"
+  let weeklyRetryable = false
   let monthlyFailed = false
   let monthlyErr = ""
+  let monthlyErrKind: ErrorKind = "unknown"
+  let monthlyRetryable = false
 
   if (!weeklyResult.ok) {
     weeklyFailed = true
     weeklyErr = weeklyResult.error
+    weeklyErrKind = weeklyResult.errorKind
+    weeklyRetryable = weeklyResult.retryable
   } else if (weeklyResult.statusCode < 200 || weeklyResult.statusCode >= 300) {
     const cls = classifyUpstreamStatus(weeklyResult.statusCode)
     if (cls) {
       weeklyFailed = true
       weeklyErr = cls.error ?? `upstream status ${weeklyResult.statusCode}`
+      weeklyErrKind = cls.errorKind ?? "upstream-error"
+      weeklyRetryable = cls.retryable ?? true
     }
   }
 
   if (!monthlyResult.ok) {
     monthlyFailed = true
     monthlyErr = monthlyResult.error
+    monthlyErrKind = monthlyResult.errorKind
+    monthlyRetryable = monthlyResult.retryable
   } else if (monthlyResult.statusCode < 200 || monthlyResult.statusCode >= 300) {
     const cls = classifyUpstreamStatus(monthlyResult.statusCode)
     if (cls) {
       monthlyFailed = true
       monthlyErr = cls.error ?? `upstream status ${monthlyResult.statusCode}`
+      monthlyErrKind = cls.errorKind ?? "upstream-error"
+      monthlyRetryable = cls.retryable ?? true
     }
   }
 
@@ -475,10 +490,14 @@ async function queryXai(
       if (!weeklyConfig) {
         weeklyFailed = true
         weeklyErr = "no config in weekly response"
+        weeklyErrKind = "no-data"
+        weeklyRetryable = false
       }
     } catch {
       weeklyFailed = true
       weeklyErr = "weekly response parse error"
+      weeklyErrKind = "parse-error"
+      weeklyRetryable = false
     }
   }
   if (monthlyResult.ok && monthlyResult.statusCode >= 200 && monthlyResult.statusCode < 300) {
@@ -488,10 +507,14 @@ async function queryXai(
       if (!monthlyConfig) {
         monthlyFailed = true
         monthlyErr = "no config in monthly response"
+        monthlyErrKind = "no-data"
+        monthlyRetryable = false
       }
     } catch {
       monthlyFailed = true
       monthlyErr = "monthly response parse error"
+      monthlyErrKind = "parse-error"
+      monthlyRetryable = false
     }
   }
 
@@ -511,22 +534,13 @@ async function queryXai(
     const err = weeklyFailed ? weeklyErr
       : monthlyFailed ? monthlyErr
       : "no billing data"
-    // Merge errorKind: prefer the most specific (mgmt-auth > upstream-* > unknown > no-data).
-    // Also merge retryable: if ANY endpoint was retryable, the account query is retryable.
-    const weeklyKind = !weeklyResult.ok ? weeklyResult.errorKind
-      : weeklyFailed ? (classifyUpstreamStatus(weeklyResult.statusCode)?.errorKind ?? "upstream-error")
-      : undefined
-    const monthlyKind = !monthlyResult.ok ? monthlyResult.errorKind
-      : monthlyFailed ? (classifyUpstreamStatus(monthlyResult.statusCode)?.errorKind ?? "upstream-error")
-      : undefined
-    const kind = (weeklyKind ?? monthlyKind ?? "no-data") as ErrorKind
-    const weeklyRetry = !weeklyResult.ok ? weeklyResult.retryable
-      : weeklyFailed ? (classifyUpstreamStatus(weeklyResult.statusCode)?.retryable ?? true)
-      : false
-    const monthlyRetry = !monthlyResult.ok ? monthlyResult.retryable
-      : monthlyFailed ? (classifyUpstreamStatus(monthlyResult.statusCode)?.retryable ?? true)
-      : false
-    const retryable = weeklyRetry || monthlyRetry
+    // Use the per-endpoint failure state which carries the correct errorKind
+    // and retryable for parse/no-data failures (not just status code based).
+    const kind = (weeklyFailed ? weeklyErrKind
+      : monthlyFailed ? monthlyErrKind
+      : "no-data") as ErrorKind
+    const retryable = (weeklyFailed ? weeklyRetryable : false)
+      || (monthlyFailed ? monthlyRetryable : false)
     return { metrics: [], error: err, errorKind: kind, retryable }
   }
 

@@ -77,7 +77,7 @@ function findCookiePair(cookieHeader: string, name: string): string | undefined 
   return undefined
 }
 
-function originAllowed(origin: string | undefined, c: Context, isProduction: boolean, publicOrigin: string | undefined): boolean {
+function originAllowed(origin: string | undefined, c: Context, isProduction: boolean, publicOrigin: string | undefined, allowDevCors: boolean): boolean {
   if (origin === undefined || origin === "") return true
   // In production, allow same-origin requests.
   // PUBLIC_ORIGIN takes precedence (for HTTPS reverse proxy where c.req.url
@@ -90,11 +90,16 @@ function originAllowed(origin: string | undefined, c: Context, isProduction: boo
         const reqOrigin = new URL(c.req.url).origin
         if (origin === reqOrigin) return true
       } catch {
-        // fall through to dev CORS check
+        // fall through
       }
     }
+    // In production, do NOT fall through to the dev CORS allowlist.
+    // Only same-origin or PUBLIC_ORIGIN is allowed.
+    return false
   }
-  return isAllowedDevCorsOrigin(origin)
+  // In development, allow Vite dev server origins.
+  if (allowDevCors) return isAllowedDevCorsOrigin(origin)
+  return false
 }
 
 export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey: string } }> {
@@ -191,18 +196,24 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
   }
 
   // --- POST /api/session/:profileId ---
-  // Order: Origin check + IP rate-limit FIRST (cheap, no body read), then
-  // bodyLimit + auth. This prevents slowloris-style attacks from consuming
-  // body-parsing resources before rate limiting kicks in.
+  // Order: profileId validation + Origin check + IP rate-limit FIRST (cheap,
+  // no body read), then bodyLimit + auth. This prevents slowloris-style attacks
+  // and limits Map key cardinality to known profiles only.
   app.post(
     "/api/session/:profileId",
     async (c, next) => {
+      // Validate profileId exists BEFORE rate-limiting to prevent unbounded
+      // Map key growth from arbitrary path segments.
+      const profileId = c.req.param("profileId")
+      if (!deps!.config.profiles.has(profileId)) {
+        return c.json({ error: "unauthorized" }, 401)
+      }
       // Origin check
       const origin = c.req.header("origin")
-      if (!originAllowed(origin, c, secure, publicOrigin)) return c.json({ error: "forbidden" }, 403)
+      if (!originAllowed(origin, c, secure, publicOrigin, !secure)) return c.json({ error: "forbidden" }, 403)
       // IP rate-limit check (before body parsing)
       const ip = clientIp(c)
-      const rateLimitKey = `login:${ip}:${c.req.param("profileId")}`
+      const rateLimitKey = `login:${ip}:${profileId}`
       if (!loginRateLimiter.check(rateLimitKey)) {
         c.header("Retry-After", String(5 * 60))
         return c.json({ error: "rate_limited" }, 429)
@@ -217,6 +228,8 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
     async (c) => {
     const profileId = c.req.param("profileId")
     const profile = deps!.config.profiles.get(profileId)
+    // Profile was already validated in the middleware above, but TypeScript
+    // doesn't know that. Re-check is a no-op in practice.
     if (!profile) return c.json({ error: "unauthorized" }, 401)
 
     let viewKey: string | undefined
@@ -268,7 +281,7 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
     const profileId = c.req.param("profileId")
 
     const origin = c.req.header("origin")
-    if (!originAllowed(origin, c, secure, publicOrigin)) return c.json({ error: "forbidden" }, 403)
+    if (!originAllowed(origin, c, secure, publicOrigin, !secure)) return c.json({ error: "forbidden" }, 403)
 
     const authFail = authenticate(c, profileId)
     if (authFail !== null) return authFail

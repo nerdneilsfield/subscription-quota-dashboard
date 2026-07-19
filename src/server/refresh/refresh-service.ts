@@ -322,43 +322,49 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
         }
       }
     } else if ((result.errors ?? []).length > 0 && result.metrics.length > 0) {
-      // Partial failure: merge returned metrics into last-known-good by providerMetricId
+      // Partial failure: merge returned metrics into last-known-good.
+      // Precision: only preserve old metrics for providerMetricIds that
+      // correspond to subscriptions the adapter DIDN'T return this cycle.
+      // Successfully-refreshed subscriptions use only their new IDs.
       const existing = storage.providerCache.get(paId)
       if (existing) {
-        const resultById = new Map(
-          result.metrics.map((m) => [(m as NormalizedMetric).providerMetricId, m as Record<string, unknown>]),
-        )
-        const merged = existing.normalized.metrics.map((oldMetric) => {
-          const old = oldMetric as NormalizedMetric
-          const fresh = resultById.get(old.providerMetricId)
-          return fresh ?? oldMetric
-        })
-        // Append any new metrics not previously in cache
-        for (const [id, m] of resultById) {
-          if (!merged.some((mm) => (mm as NormalizedMetric).providerMetricId === id)) {
-            merged.push(m)
-          }
-        }
-        normalizedForCache = merged
-        // P1.1: Also merge dynamicSubscriptions by id - union providerMetricIds
-        // so the projection layer still finds the preserved old metrics.
-        if (result.dynamicSubscriptions !== undefined && existing.dynamicSubscriptions !== undefined) {
-          const existingById = new Map(existing.dynamicSubscriptions.map((ds) => [ds.id, ds]))
-          dynamicSubsForCache = result.dynamicSubscriptions.map((newDs) => {
-            const oldDs = existingById.get(newDs.id)
-            if (oldDs === undefined) return newDs
-            // Union: preserve old IDs not in new, add new IDs
-            const newIds = new Set(newDs.providerMetricIds)
-            const preservedOld = oldDs.providerMetricIds.filter((id) => !newIds.has(id))
-            return { ...newDs, providerMetricIds: [...newDs.providerMetricIds, ...preservedOld] }
-          })
-          // Also preserve any old subs not in result (e.g. adapter dropped one entirely)
-          const newIds = new Set(result.dynamicSubscriptions.map((ds) => ds.id))
-          for (const [id, oldDs] of existingById) {
-            if (!newIds.has(id)) {
-              dynamicSubsForCache = [...(dynamicSubsForCache ?? []), oldDs]
+        // Build set of providerMetricIds the adapter returned this cycle.
+        const returnedIds = new Set(result.metrics.map((m) => (m as NormalizedMetric).providerMetricId))
+        // Build set of IDs that were in the adapter's dynamicSubscriptions this cycle.
+        const currentSubIds = result.dynamicSubscriptions
+          ? new Set(result.dynamicSubscriptions.flatMap((ds) => ds.providerMetricIds))
+          : returnedIds
+
+        // Merge metrics: replace returned ones, preserve old ones only if
+        // they belong to a subscription NOT present in this cycle's output.
+        const oldIdsToPreserve = new Set<string>()
+        if (existing.dynamicSubscriptions) {
+          for (const oldDs of existing.dynamicSubscriptions) {
+            // If this subscription was NOT returned this cycle, preserve its metrics.
+            const wasReturned = result.dynamicSubscriptions?.some((nds) => nds.id === oldDs.id) ?? false
+            if (!wasReturned) {
+              for (const id of oldDs.providerMetricIds) oldIdsToPreserve.add(id)
             }
           }
+        }
+
+        const merged = existing.normalized.metrics.filter((oldMetric) => {
+          const old = oldMetric as NormalizedMetric
+          // Keep old metric if it's NOT being replaced AND it's from a
+          // subscription not returned this cycle.
+          return !returnedIds.has(old.providerMetricId) && oldIdsToPreserve.has(old.providerMetricId)
+        })
+        // Add all fresh metrics
+        merged.push(...(result.metrics as Array<Record<string, unknown>>))
+        normalizedForCache = merged
+
+        // dynamicSubscriptions: use this cycle's subscriptions verbatim.
+        // Old subscriptions for accounts not returned are preserved (coalesce
+        // already handles this, but be explicit for partial case).
+        if (result.dynamicSubscriptions !== undefined && existing.dynamicSubscriptions !== undefined) {
+          const newSubIds = new Set(result.dynamicSubscriptions.map((ds) => ds.id))
+          const preservedOldSubs = existing.dynamicSubscriptions.filter((ds) => !newSubIds.has(ds.id))
+          dynamicSubsForCache = [...result.dynamicSubscriptions, ...preservedOldSubs]
         }
       }
     }

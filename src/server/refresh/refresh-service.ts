@@ -300,12 +300,18 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     // preserves the subscription list; this extends the same semantics to metrics.
     // Additionally, preserve the old fetchedAt/staleAfter so the cache doesn't
     // pretend to be fresh when the refresh actually failed.
+    //
+    // P1.6: When the adapter returned SOME metrics AND has errors (partial
+    // failure), merge by providerMetricId: update metrics that were returned,
+    // preserve old ones for metrics the adapter couldn't produce this cycle.
+    // This prevents cards from disappearing on partial outages (e.g. xAI weekly
+    // endpoint fails but monthly succeeds -> weekly card stays from last-good).
     let normalizedForCache = result.metrics as Array<Record<string, unknown>>
     let dynamicSubsForCache = result.dynamicSubscriptions
     let cacheFetchedAt = result.fetchedAt
     let cacheStaleAfter = result.staleAfter
     if (result.metrics.length === 0 && (result.errors ?? []).length > 0) {
-      // Adapter failure: preserve old metrics + old dynamicSubscriptions + old timestamps
+      // Total failure: preserve old metrics + old dynamicSubscriptions + old timestamps
       const existing = storage.providerCache.get(paId)
       if (existing) {
         normalizedForCache = existing.normalized.metrics
@@ -314,6 +320,26 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
         if (dynamicSubsForCache === undefined && existing.dynamicSubscriptions !== undefined) {
           dynamicSubsForCache = existing.dynamicSubscriptions
         }
+      }
+    } else if ((result.errors ?? []).length > 0 && result.metrics.length > 0) {
+      // Partial failure: merge returned metrics into last-known-good by providerMetricId
+      const existing = storage.providerCache.get(paId)
+      if (existing) {
+        const resultById = new Map(
+          result.metrics.map((m) => [(m as NormalizedMetric).providerMetricId, m as Record<string, unknown>]),
+        )
+        const merged = existing.normalized.metrics.map((oldMetric) => {
+          const old = oldMetric as NormalizedMetric
+          const fresh = resultById.get(old.providerMetricId)
+          return fresh ?? oldMetric
+        })
+        // Append any new metrics not previously in cache
+        for (const [id, m] of resultById) {
+          if (!merged.some((mm) => (mm as NormalizedMetric).providerMetricId === id)) {
+            merged.push(m)
+          }
+        }
+        normalizedForCache = merged
       }
     }
 

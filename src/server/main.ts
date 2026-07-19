@@ -31,6 +31,9 @@ const configPath = process.env.CONFIG_PATH ?? "config/dashboard.config.ts"
 const dbPath = process.env.DASHBOARD_DB ?? "data/dashboard.db"
 const nodeEnv = process.env.NODE_ENV === "production" ? "production" : "development"
 const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES)
+// The public-facing origin for same-origin Origin checks. Set this when
+// behind an HTTPS-terminating reverse proxy, e.g. https://dashboard.example.com.
+const publicOrigin = process.env.PUBLIC_ORIGIN || undefined
 
 async function main(): Promise<void> {
   const config = await loadDashboardConfigFromFile(resolve(configPath))
@@ -71,6 +74,7 @@ async function main(): Promise<void> {
     sessionSecret,
     environment: nodeEnv,
     trustedProxies,
+    ...(publicOrigin !== undefined ? { publicOrigin } : {}),
     ...(staticDir !== undefined ? { staticDir } : {}),
   }
 

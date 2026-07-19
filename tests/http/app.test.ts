@@ -98,6 +98,7 @@ function makeDeps(overrides: {
   staticDir?: string
   environment?: "development" | "production" | "test"
   trustedProxies?: string[]
+  publicOrigin?: string
 } = {}): AppDeps {
   const config = loadDashboardConfig(baseConfig())
   const storage = overrides.storage ?? makeStorage()
@@ -114,6 +115,7 @@ function makeDeps(overrides: {
     ...(overrides.staticDir !== undefined ? { staticDir: overrides.staticDir } : {}),
     ...(overrides.environment !== undefined ? { environment: overrides.environment } : {}),
     ...(overrides.trustedProxies !== undefined ? { trustedProxies: overrides.trustedProxies } : {}),
+    ...(overrides.publicOrigin !== undefined ? { publicOrigin: overrides.publicOrigin } : {}),
   }
 }
 
@@ -422,6 +424,24 @@ test("P1.2: dev mode allows Vite origin", async () => {
     headers: { ...authHeaders(), Origin: "http://localhost:5173" },
   })
   expect(res.status).not.toBe(403)
+})
+
+test("P1.2: production with PUBLIC_ORIGIN allows matching HTTPS origin", async () => {
+  const app = createApp(makeDeps({ environment: "production", publicOrigin: "https://dashboard.example.com" }))
+  const res = await app.request("/api/dashboard/self/refresh", {
+    method: "POST",
+    headers: { ...authHeaders(), Origin: "https://dashboard.example.com" },
+  })
+  expect(res.status).not.toBe(403)
+})
+
+test("P1.2: production with PUBLIC_ORIGIN rejects non-matching origin", async () => {
+  const app = createApp(makeDeps({ environment: "production", publicOrigin: "https://dashboard.example.com" }))
+  const res = await app.request("/api/dashboard/self/refresh", {
+    method: "POST",
+    headers: { ...authHeaders(), Origin: "http://localhost" },
+  })
+  expect(res.status).toBe(403)
 })
 
 // --- P2.1: Login rate limiting ---

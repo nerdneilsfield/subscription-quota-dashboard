@@ -24,10 +24,9 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
   const sessionCtrlRef = useRef<AbortController | null>(null)
 
   // checking-session: one getDashboard with existing cookies.
-  // Re-run only when profileId changes (navigating to a different profile
-  // remounts this component, but listing profileId makes the intent explicit).
-  // Range is intentionally captured from the initial render: range switches
-  // are handled by Dashboard's own fetchRange effect, not by re-checking auth.
+  // Component remounts on profileId change (via key={profileId} in App.tsx),
+  // so this effect runs once per profile. Range is included in deps so that
+  // changing range on the login screen re-fetches with the correct range.
   useEffect(() => {
     const ctrl = new AbortController()
     sessionCtrlRef.current = ctrl
@@ -48,8 +47,7 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
       cancelled = true
       ctrl.abort()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileId])
+  }, [profileId, range])
 
   const retrySession = () => {
     setSessionError(undefined)

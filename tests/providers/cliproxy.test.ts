@@ -407,3 +407,38 @@ test("xai: weekly 500 + monthly 200 produces monthly metrics + partial warning",
   const xaiError = result.errors?.find(e => e.message.includes("ghi789") && e.message.includes("weekly"))
   expect(xaiError).toBeDefined()
 })
+
+// P1.7: xai partial failure via upstream status_code (HTTP 200 wrapping 500)
+test("P1.7: weekly upstream 500 (mgmt HTTP 200 + status_code:500) surfaces partial warning", async () => {
+  const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("/auth-files")) return makeResp(200, AUTH_FILES_BODY)
+    if (url.includes("/api-call")) {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {}
+      if (body.auth_index === "ghi789") {
+        const isWeekly = body.url?.includes("format=credits")
+        if (isWeekly) {
+          // Management API returns 200, but upstream returned 500.
+          // This is the real CLIProxy contract - status_code is in the body.
+          return makeResp(200, { status_code: 500, body: '{"error":"internal"}' })
+        }
+        return makeResp(200, makeXaiMonthlyBody())
+      }
+      if (body.auth_index === "abc123") return makeResp(200, makeCodexBody())
+      if (body.auth_index === "def456") return makeResp(200, makeClaudeBody())
+      if (body.auth_index === "err001") return makeResp(200, makeCodexBody())
+      return makeResp(200, { status_code: 500, body: "{}" })
+    }
+    return makeResp(404, {})
+  }
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  // Monthly metric should still be present
+  const monthly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:monthly")
+  expect(monthly).toBeDefined()
+  // Weekly should be absent
+  const weekly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:weekly")
+  expect(weekly).toBeUndefined()
+  // Partial warning should be recorded (detects upstream status_code 500)
+  const xaiError = result.errors?.find(e => e.message.includes("ghi789") && e.message.includes("weekly"))
+  expect(xaiError).toBeDefined()
+})

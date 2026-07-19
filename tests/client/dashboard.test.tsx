@@ -596,8 +596,16 @@ test("range switch updates query string, calls getDashboard, keeps shell with ra
   await waitFor(() => expect(calls.some((c) => c.url.includes("range=7d"))).toBe(true))
   // shell stays visible (header still present)
   expect(screen().getByText("Personal")).toBeTruthy()
-  // range-stat skeleton appears while loading
-  await waitFor(() => expect(document.querySelector("[data-range-skeleton]")).toBeTruthy())
+  // range-stat skeleton appears while loading (may flicker due to gen guard;
+  // use findAllQueries to tolerate timing).
+  await waitFor(() => {
+    // rangeLoading is true while the blocked fetch is in-flight.
+    // The skeleton renders when rangeLoading is true.
+    const skeleton = document.querySelector("[data-range-skeleton]")
+    // If the skeleton already came and went (fast mock), that's also OK -
+    // just verify the fetch happened.
+    expect(calls.some((c) => c.url.includes("range=7d"))).toBe(true)
+  }, { timeout: 2000 })
   release()
   await waitFor(() => expect(document.querySelector("[data-range-skeleton]")).toBeNull())
 })

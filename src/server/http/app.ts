@@ -1,4 +1,6 @@
 import { Hono, type Context } from "hono"
+import { getConnInfo } from "@hono/node-server/conninfo"
+import { bodyLimit } from "hono/body-limit"
 import { readFileSync, existsSync } from "node:fs"
 import { join, extname } from "node:path"
 import type { NormalizedConfig } from "../../shared/domain"
@@ -29,6 +31,7 @@ export type AppDeps = {
   staticDir?: string
   environment?: "development" | "production" | "test"
   trustedProxies?: string[]
+  publicOrigin?: string
 }
 
 const VALID_RANGES: ReadonlySet<string> = new Set(["1h", "24h", "7d", "30d"])
@@ -74,15 +77,21 @@ function findCookiePair(cookieHeader: string, name: string): string | undefined 
   return undefined
 }
 
-function originAllowed(origin: string | undefined, c: Context, isProduction: boolean): boolean {
+function originAllowed(origin: string | undefined, c: Context, isProduction: boolean, publicOrigin: string | undefined): boolean {
   if (origin === undefined || origin === "") return true
-  // In production, allow same-origin requests (Origin matches the request URL).
+  // In production, allow same-origin requests.
+  // PUBLIC_ORIGIN takes precedence (for HTTPS reverse proxy where c.req.url
+  // is http:// but the browser sees https://).
   if (isProduction) {
-    try {
-      const reqOrigin = new URL(c.req.url).origin
-      if (origin === reqOrigin) return true
-    } catch {
-      // fall through to dev CORS check
+    if (publicOrigin !== undefined) {
+      if (origin === publicOrigin) return true
+    } else {
+      try {
+        const reqOrigin = new URL(c.req.url).origin
+        if (origin === reqOrigin) return true
+      } catch {
+        // fall through to dev CORS check
+      }
     }
   }
   return isAllowedDevCorsOrigin(origin)
@@ -112,12 +121,12 @@ export function createApp(deps?: AppDeps): Hono {
   const nowMs = (): number => now().getTime()
   const secure = deps.environment === "production"
   const trustedProxies = new Set(deps.trustedProxies ?? [])
+  const publicOrigin = deps.publicOrigin
   const loginRateLimiter = createRateLimiter({
     maxAttempts: 5,
     windowMs: 5 * 60 * 1000,
     now: nowMs,
   })
-  const MAX_LOGIN_BODY_BYTES = 4096
 
   const refreshService = createRefreshService({
     config: deps.config,
@@ -133,8 +142,16 @@ export function createApp(deps?: AppDeps): Hono {
 
   function clientIp(c: Context): string {
     const xff = c.req.header("x-forwarded-for")
-    // Hono's node-server adapter exposes the raw IncomingMessage
-    const socketIp = (c.req.raw as unknown as { socket?: { remoteAddress?: string } }).socket?.remoteAddress
+    // Use @hono/node-server's getConnInfo for the real socket address.
+    // In test mode (app.request without a real server), c.env may not have
+    // the server binding; fall back to XFF or "unknown".
+    let socketIp: string | undefined
+    try {
+      socketIp = getConnInfo(c).remote.address
+    } catch {
+      // c.env.server not available (test mode) - use XFF first entry or unknown
+      socketIp = undefined
+    }
     return resolveClientIp(socketIp, xff, trustedProxies)
   }
 
@@ -174,13 +191,19 @@ export function createApp(deps?: AppDeps): Hono {
   }
 
   // --- POST /api/session/:profileId ---
-  app.post("/api/session/:profileId", async (c) => {
+  app.post(
+    "/api/session/:profileId",
+    bodyLimit({
+      maxSize: 4096,
+      onError: (c) => c.json({ error: "request body too large" }, 413),
+    }),
+    async (c) => {
     const profileId = c.req.param("profileId")
     const profile = deps!.config.profiles.get(profileId)
     if (!profile) return c.json({ error: "unauthorized" }, 401)
 
     const origin = c.req.header("origin")
-    if (!originAllowed(origin, c, secure)) return c.json({ error: "forbidden" }, 403)
+    if (!originAllowed(origin, c, secure, publicOrigin)) return c.json({ error: "forbidden" }, 403)
 
     // Rate-limit login attempts per IP + profile to prevent brute-force.
     const ip = clientIp(c)
@@ -200,11 +223,6 @@ export function createApp(deps?: AppDeps): Hono {
       if (!isJsonContentType(c.req.header("content-type"))) {
         return c.json({ error: "content-type must be application/json" }, 400)
       }
-      // Reject oversized bodies before parsing.
-      const contentLength = Number(c.req.header("content-length") ?? 0)
-      if (contentLength > MAX_LOGIN_BODY_BYTES) {
-        return c.json({ error: "request body too large" }, 413)
-      }
       try {
         const body = (await c.req.json()) as { viewKey?: unknown }
         if (typeof body.viewKey === "string") viewKey = body.viewKey
@@ -222,7 +240,8 @@ export function createApp(deps?: AppDeps): Hono {
     const cookie = createSessionCookie(profile.id, viewKey, deps!.sessionSecret, nowMs(), SESSION_MAX_AGE_SECONDS, secure)
     c.header("set-cookie", cookie)
     return c.json({ ok: true }, 200)
-  })
+    },
+  )
 
   // --- GET /api/dashboard/:profileId ---
   app.get("/api/dashboard/:profileId", (c) => {
@@ -242,7 +261,7 @@ export function createApp(deps?: AppDeps): Hono {
     const profileId = c.req.param("profileId")
 
     const origin = c.req.header("origin")
-    if (!originAllowed(origin, c, secure)) return c.json({ error: "forbidden" }, 403)
+    if (!originAllowed(origin, c, secure, publicOrigin)) return c.json({ error: "forbidden" }, 403)
 
     const authFail = authenticate(c, profileId)
     if (authFail !== null) return authFail

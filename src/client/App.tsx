@@ -22,6 +22,7 @@ function DashboardRoute() {
   const range = rangeParam as RangeKey
   return (
     <AuthGate
+      key={profileId}
       profileId={profileId}
       range={range}
       onRangeChange={(r) => setParams({ range: r })}

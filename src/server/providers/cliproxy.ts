@@ -419,11 +419,10 @@ async function queryXai(
     return { metrics: [], error: monthlyResult.error, errorKind: monthlyResult.errorKind, retryable: monthlyResult.retryable }
   }
 
-  // Check upstream status codes for auth errors
-  if (weeklyResult.ok && (weeklyResult.statusCode === 401 || weeklyResult.statusCode === 403)) {
-    return { metrics: [], error: "upstream auth failed (possible stale auth_index)", errorKind: "upstream-auth", retryable: false }
-  }
-  if (monthlyResult.ok && (monthlyResult.statusCode === 401 || monthlyResult.statusCode === 403)) {
+  // Check upstream status codes for auth errors (both endpoints must fail auth
+  // to return here; if only one fails, treat as partial below).
+  if (weeklyResult.ok && (weeklyResult.statusCode === 401 || weeklyResult.statusCode === 403)
+      && monthlyResult.ok && (monthlyResult.statusCode === 401 || monthlyResult.statusCode === 403)) {
     return { metrics: [], error: "upstream auth failed (possible stale auth_index)", errorKind: "upstream-auth", retryable: false }
   }
 
@@ -431,41 +430,84 @@ async function queryXai(
   let weeklyConfig: Record<string, unknown> | undefined
   let monthlyConfig: Record<string, unknown> | undefined
 
+  // Track per-endpoint failure state for partial detection.
+  // An endpoint "fails" if: apiCall returned !ok, OR the upstream status_code
+  // is non-2xx (the management API wraps upstream status in status_code).
+  let weeklyFailed = false
+  let weeklyErr = ""
+  let monthlyFailed = false
+  let monthlyErr = ""
+
+  if (!weeklyResult.ok) {
+    weeklyFailed = true
+    weeklyErr = weeklyResult.error
+  } else if (weeklyResult.statusCode < 200 || weeklyResult.statusCode >= 300) {
+    const cls = classifyUpstreamStatus(weeklyResult.statusCode)
+    if (cls) {
+      weeklyFailed = true
+      weeklyErr = cls.error ?? `upstream status ${weeklyResult.statusCode}`
+    }
+  }
+
+  if (!monthlyResult.ok) {
+    monthlyFailed = true
+    monthlyErr = monthlyResult.error
+  } else if (monthlyResult.statusCode < 200 || monthlyResult.statusCode >= 300) {
+    const cls = classifyUpstreamStatus(monthlyResult.statusCode)
+    if (cls) {
+      monthlyFailed = true
+      monthlyErr = cls.error ?? `upstream status ${monthlyResult.statusCode}`
+    }
+  }
+
   if (weeklyResult.ok && weeklyResult.statusCode >= 200 && weeklyResult.statusCode < 300) {
     try {
       const parsed = JSON.parse(weeklyResult.body) as { config?: Record<string, unknown> }
       weeklyConfig = parsed.config
-    } catch { /* handled below */ }
+      if (!weeklyConfig) {
+        weeklyFailed = true
+        weeklyErr = "no config in weekly response"
+      }
+    } catch {
+      weeklyFailed = true
+      weeklyErr = "weekly response parse error"
+    }
   }
   if (monthlyResult.ok && monthlyResult.statusCode >= 200 && monthlyResult.statusCode < 300) {
     try {
       const parsed = JSON.parse(monthlyResult.body) as { config?: Record<string, unknown> }
       monthlyConfig = parsed.config
-    } catch { /* handled below */ }
+      if (!monthlyConfig) {
+        monthlyFailed = true
+        monthlyErr = "no config in monthly response"
+      }
+    } catch {
+      monthlyFailed = true
+      monthlyErr = "monthly response parse error"
+    }
   }
 
   const config = weeklyConfig ?? monthlyConfig
 
-  // Track partial failures: if one endpoint failed (non-auth, non-2xx) but
-  // the other succeeded, surface a warning instead of silently swallowing it.
+  // Track partial failures: if one endpoint failed but the other succeeded,
+  // surface a warning instead of silently swallowing it.
   const partialWarnings: string[] = []
-  if (!weeklyResult.ok && monthlyConfig !== undefined && weeklyResult.errorKind !== "mgmt-auth") {
-    partialWarnings.push(`weekly endpoint failed: ${weeklyResult.error}`)
+  if (weeklyFailed && monthlyConfig !== undefined) {
+    partialWarnings.push(`weekly endpoint failed: ${weeklyErr}`)
   }
-  if (!monthlyResult.ok && weeklyConfig !== undefined && monthlyResult.errorKind !== "mgmt-auth") {
-    partialWarnings.push(`monthly endpoint failed: ${monthlyResult.error}`)
+  if (monthlyFailed && weeklyConfig !== undefined) {
+    partialWarnings.push(`monthly endpoint failed: ${monthlyErr}`)
   }
 
   if (!config) {
-    const err = !weeklyResult.ok ? weeklyResult.error
-      : !monthlyResult.ok ? monthlyResult.error
+    const err = weeklyFailed ? weeklyErr
+      : monthlyFailed ? monthlyErr
       : "no billing data"
     const kind = !weeklyResult.ok ? weeklyResult.errorKind
       : !monthlyResult.ok ? monthlyResult.errorKind
       : "no-data" as ErrorKind
-    const retryable = !weeklyResult.ok ? weeklyResult.retryable
-      : !monthlyResult.ok ? monthlyResult.retryable
-      : false
+    const retryable = (!weeklyResult.ok ? weeklyResult.retryable : false)
+      || (!monthlyResult.ok ? monthlyResult.retryable : false)
     return { metrics: [], error: err, errorKind: kind, retryable }
   }
 
@@ -532,7 +574,7 @@ async function queryXai(
   return { metrics }
 }
 
-// Shared upstream status classifier for Codex and Claude (and now xai via inline check)
+// Shared upstream status classifier for Codex, Claude, and xAI.
 function classifyUpstreamStatus(statusCode: number): AccountQueryResult | null {
   if (statusCode === 401 || statusCode === 403) {
     return { metrics: [], error: "upstream auth failed (possible stale auth_index)", errorKind: "upstream-auth", retryable: false }

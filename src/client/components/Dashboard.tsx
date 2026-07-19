@@ -90,7 +90,7 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
       else if (mode === "range") setRangeLoading(true)
       const res = await getDashboard(profileId, nextRange, ctrl.signal)
       handleResult(nextRange, res, ctrl, gen, mode === "silent")
-      if (mode === "range") setRangeLoading(false)
+      if (mode === "range" && gen === genRef.current) setRangeLoading(false)
     },
     [profileId, handleResult],
   )
@@ -135,6 +135,11 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
   }, [])
 
   const doRefresh = useCallback(async () => {
+    // Clear any pending "Updated" timer so it can't clobber the new refresh.
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current)
+      refreshTimerRef.current = null
+    }
     // Abort any in-flight range fetch; refresh takes over.
     abortRef.current?.abort()
     const ctrl = new AbortController()
@@ -142,7 +147,12 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
     const gen = ++genRef.current
     setRefresh({ state: "refreshing" })
     const res = await refreshDashboard(profileId, range, ctrl.signal)
-    if (ctrl.signal.aborted || gen !== genRef.current) return
+    if (ctrl.signal.aborted || gen !== genRef.current) {
+      // Aborted by a range switch or newer refresh: reset to idle so the
+      // button doesn't stay stuck in "refreshing" forever.
+      setRefresh({ state: "idle" })
+      return
+    }
     if (res.ok) {
       setPayload(res.value)
       const hasStale = res.value.subscriptions.some(
@@ -152,7 +162,6 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
         setRefresh({ state: "idle" })
       } else {
         setRefresh({ state: "updated" })
-        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
         refreshTimerRef.current = setTimeout(() => setRefresh({ state: "idle" }), 2000)
       }
       return

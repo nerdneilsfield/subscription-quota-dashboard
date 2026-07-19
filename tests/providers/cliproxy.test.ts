@@ -372,7 +372,25 @@ test("codex: unknown limit_window_seconds produces generic window metric", async
   expect(generic!.used).toBe(50)
   expect(generic!.window?.kind).toBe("rolling")
   if (generic!.window?.kind === "rolling") {
-    expect(generic!.window.duration).toBe("24h")
+    expect(generic!.window.duration).toBe("1d")
+  }
+})
+
+test("codex: 5400s window labeled as 90m (not rounded to 2h)", async () => {
+  const body = {
+    status_code: 200,
+    body: JSON.stringify({
+      rate_limit: {
+        primary_window: { used_percent: 30, limit_window_seconds: 5400, reset_at: 1783275600 },
+      },
+    }),
+  }
+  const fetchImpl = makeFakeFetch(body)
+  const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
+  const m = result.metrics.find(m => m.providerMetricId === "codex:abc123:window_5400")
+  expect(m).toBeDefined()
+  if (m!.window?.kind === "rolling") {
+    expect(m!.window.duration).toBe("90m")
   }
 })
 

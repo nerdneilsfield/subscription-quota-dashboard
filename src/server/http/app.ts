@@ -97,8 +97,8 @@ function originAllowed(origin: string | undefined, c: Context, isProduction: boo
   return isAllowedDevCorsOrigin(origin)
 }
 
-export function createApp(deps?: AppDeps): Hono {
-  const app = new Hono()
+export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey: string } }> {
+  const app = new Hono<{ Variables: { loginRateLimitKey: string } }>()
 
   app.use("*", async (c, next) => {
     await next()
@@ -191,8 +191,25 @@ export function createApp(deps?: AppDeps): Hono {
   }
 
   // --- POST /api/session/:profileId ---
+  // Order: Origin check + IP rate-limit FIRST (cheap, no body read), then
+  // bodyLimit + auth. This prevents slowloris-style attacks from consuming
+  // body-parsing resources before rate limiting kicks in.
   app.post(
     "/api/session/:profileId",
+    async (c, next) => {
+      // Origin check
+      const origin = c.req.header("origin")
+      if (!originAllowed(origin, c, secure, publicOrigin)) return c.json({ error: "forbidden" }, 403)
+      // IP rate-limit check (before body parsing)
+      const ip = clientIp(c)
+      const rateLimitKey = `login:${ip}:${c.req.param("profileId")}`
+      if (!loginRateLimiter.check(rateLimitKey)) {
+        c.header("Retry-After", String(5 * 60))
+        return c.json({ error: "rate_limited" }, 429)
+      }
+      c.set("loginRateLimitKey", rateLimitKey)
+      await next()
+    },
     bodyLimit({
       maxSize: 4096,
       onError: (c) => c.json({ error: "request body too large" }, 413),
@@ -201,17 +218,6 @@ export function createApp(deps?: AppDeps): Hono {
     const profileId = c.req.param("profileId")
     const profile = deps!.config.profiles.get(profileId)
     if (!profile) return c.json({ error: "unauthorized" }, 401)
-
-    const origin = c.req.header("origin")
-    if (!originAllowed(origin, c, secure, publicOrigin)) return c.json({ error: "forbidden" }, 403)
-
-    // Rate-limit login attempts per IP + profile to prevent brute-force.
-    const ip = clientIp(c)
-    const rateLimitKey = `login:${ip}:${profileId}`
-    if (!loginRateLimiter.check(rateLimitKey)) {
-      c.header("Retry-After", String(5 * 60))
-      return c.json({ error: "rate_limited" }, 429)
-    }
 
     let viewKey: string | undefined
     const authHeader = c.req.header("authorization")
@@ -236,7 +242,8 @@ export function createApp(deps?: AppDeps): Hono {
     }
 
     // Successful login: reset the rate-limit bucket so the user isn't penalized.
-    loginRateLimiter.reset(rateLimitKey)
+    const rateLimitKey = c.get("loginRateLimitKey") as string | undefined
+    if (rateLimitKey) loginRateLimiter.reset(rateLimitKey)
     const cookie = createSessionCookie(profile.id, viewKey, deps!.sessionSecret, nowMs(), SESSION_MAX_AGE_SECONDS, secure)
     c.header("set-cookie", cookie)
     return c.json({ ok: true }, 200)

@@ -33,7 +33,23 @@ const nodeEnv = process.env.NODE_ENV === "production" ? "production" : "developm
 const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES)
 // The public-facing origin for same-origin Origin checks. Set this when
 // behind an HTTPS-terminating reverse proxy, e.g. https://dashboard.example.com.
-const publicOrigin = process.env.PUBLIC_ORIGIN || undefined
+// Canonicalized via new URL().origin so trailing slashes/path/query/hash are stripped.
+const publicOrigin = (() => {
+  const raw = process.env.PUBLIC_ORIGIN
+  if (!raw) return undefined
+  try {
+    const parsed = new URL(raw)
+    // Reject credentials in the origin
+    if (parsed.username || parsed.password) {
+      console.error(`PUBLIC_ORIGIN must not contain credentials: ${raw}`)
+      process.exit(1)
+    }
+    return parsed.origin
+  } catch {
+    console.error(`PUBLIC_ORIGIN is not a valid URL: ${raw}`)
+    process.exit(1)
+  }
+})()
 
 async function main(): Promise<void> {
   const config = await loadDashboardConfigFromFile(resolve(configPath))

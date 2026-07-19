@@ -37,7 +37,14 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
   const [phase, setPhase] = useState<Phase>(initialPayload ? "ready" : "loading")
   const [error, setError] = useState<ApiFailure | undefined>()
   const [rangeLoading, setRangeLoading] = useState(false)
+  // Ref mirror of rangeLoading so doRefresh can read it without depending on it.
+  const rangeLoadingRef = useRef(rangeLoading)
+  rangeLoadingRef.current = rangeLoading
   const [refresh, setRefresh] = useState<RefreshState>({ state: "idle" })
+  // Ref mirror of refresh.state so fetchRange can read it without depending
+  // on it (which would cause the range effect to re-run on every refresh state change).
+  const refreshStateRef = useRef(refresh.state)
+  refreshStateRef.current = refresh.state
   // A single shared abort controller for both range fetches and manual
   // refreshes. Switching range aborts an in-flight refresh, and vice versa,
   // so a stale slow response can never overwrite a newer one.
@@ -82,14 +89,26 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
 
   const fetchRange = useCallback(
     async (nextRange: RangeKey, mode: "initial" | "range" | "silent") => {
+      // Clear any pending "Updated" timer so it can't clobber the new state.
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = null
+      }
+      // Abort any in-flight operation (range or refresh).
       abortRef.current?.abort()
       const ctrl = new AbortController()
       abortRef.current = ctrl
       const gen = ++genRef.current
+      // Reset refresh state if a refresh was in-flight.
+      const curRefreshState = refreshStateRef.current
+      if (curRefreshState === "refreshing" || curRefreshState === "updated" || curRefreshState === "rate-limited") {
+        setRefresh({ state: "idle" })
+      }
       if (mode === "initial") setPhase("loading")
       else if (mode === "range") setRangeLoading(true)
       const res = await getDashboard(profileId, nextRange, ctrl.signal)
       handleResult(nextRange, res, ctrl, gen, mode === "silent")
+      // Only clear loading if this operation still owns the gen token.
       if (mode === "range" && gen === genRef.current) setRangeLoading(false)
     },
     [profileId, handleResult],
@@ -140,11 +159,13 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
       clearTimeout(refreshTimerRef.current)
       refreshTimerRef.current = null
     }
-    // Abort any in-flight range fetch; refresh takes over.
+    // Abort any in-flight operation (range fetch or prior refresh).
     abortRef.current?.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
     const gen = ++genRef.current
+    // Clear range loading if a range fetch was in-flight.
+    if (rangeLoadingRef.current) setRangeLoading(false)
     setRefresh({ state: "refreshing" })
     const res = await refreshDashboard(profileId, range, ctrl.signal)
     if (ctrl.signal.aborted || gen !== genRef.current) {
@@ -162,7 +183,10 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
         setRefresh({ state: "idle" })
       } else {
         setRefresh({ state: "updated" })
-        refreshTimerRef.current = setTimeout(() => setRefresh({ state: "idle" }), 2000)
+        // Only set the timer if this refresh still owns the gen token.
+        if (gen === genRef.current) {
+          refreshTimerRef.current = setTimeout(() => setRefresh({ state: "idle" }), 2000)
+        }
       }
       return
     }

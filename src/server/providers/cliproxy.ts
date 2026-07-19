@@ -317,10 +317,18 @@ async function queryCodex(
       else if (limitWindowSeconds === 2592000) { name = "monthly"; duration = "30d" }
       else {
         // Unknown window (e.g. daily, hourly): produce a generic metric so
-        // the data isn't silently dropped. Label as hours for readability.
-        const hours = Math.max(1, Math.round(limitWindowSeconds / 3600))
+        // the data isn't silently dropped. Use exact units when divisible;
+        // otherwise label with seconds to avoid misleading approximations.
         name = `window_${limitWindowSeconds}`
-        duration = `${hours}h`
+        if (limitWindowSeconds >= 86400 && limitWindowSeconds % 86400 === 0) {
+          duration = `${limitWindowSeconds / 86400}d`
+        } else if (limitWindowSeconds >= 3600 && limitWindowSeconds % 3600 === 0) {
+          duration = `${limitWindowSeconds / 3600}h`
+        } else if (limitWindowSeconds >= 60 && limitWindowSeconds % 60 === 0) {
+          duration = `${limitWindowSeconds / 60}m`
+        } else {
+          duration = `${limitWindowSeconds}s`
+        }
       }
 
       const resetAt = typeof window.reset_at === "number" && window.reset_at > 0
@@ -503,11 +511,22 @@ async function queryXai(
     const err = weeklyFailed ? weeklyErr
       : monthlyFailed ? monthlyErr
       : "no billing data"
-    const kind = !weeklyResult.ok ? weeklyResult.errorKind
-      : !monthlyResult.ok ? monthlyResult.errorKind
-      : "no-data" as ErrorKind
-    const retryable = (!weeklyResult.ok ? weeklyResult.retryable : false)
-      || (!monthlyResult.ok ? monthlyResult.retryable : false)
+    // Merge errorKind: prefer the most specific (mgmt-auth > upstream-* > unknown > no-data).
+    // Also merge retryable: if ANY endpoint was retryable, the account query is retryable.
+    const weeklyKind = !weeklyResult.ok ? weeklyResult.errorKind
+      : weeklyFailed ? (classifyUpstreamStatus(weeklyResult.statusCode)?.errorKind ?? "upstream-error")
+      : undefined
+    const monthlyKind = !monthlyResult.ok ? monthlyResult.errorKind
+      : monthlyFailed ? (classifyUpstreamStatus(monthlyResult.statusCode)?.errorKind ?? "upstream-error")
+      : undefined
+    const kind = (weeklyKind ?? monthlyKind ?? "no-data") as ErrorKind
+    const weeklyRetry = !weeklyResult.ok ? weeklyResult.retryable
+      : weeklyFailed ? (classifyUpstreamStatus(weeklyResult.statusCode)?.retryable ?? true)
+      : false
+    const monthlyRetry = !monthlyResult.ok ? monthlyResult.retryable
+      : monthlyFailed ? (classifyUpstreamStatus(monthlyResult.statusCode)?.retryable ?? true)
+      : false
+    const retryable = weeklyRetry || monthlyRetry
     return { metrics: [], error: err, errorKind: kind, retryable }
   }
 

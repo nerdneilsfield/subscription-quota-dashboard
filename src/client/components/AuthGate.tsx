@@ -25,9 +25,12 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
 
   // checking-session: one getDashboard with existing cookies.
   // Component remounts on profileId change (via key={profileId} in App.tsx),
-  // so this effect runs once per profile. Range is included in deps so that
-  // changing range on the login screen re-fetches with the correct range.
+  // so [profileId] deps = runs once per profile mount. Range is captured from
+  // the initial render closure; range changes after auth are handled by
+  // Dashboard's own fetchRange effect.
   useEffect(() => {
+    // Only run the session check when in checking-session state.
+    if (auth !== "checking-session") return
     const ctrl = new AbortController()
     sessionCtrlRef.current = ctrl
     let cancelled = false
@@ -47,25 +50,12 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
       cancelled = true
       ctrl.abort()
     }
-  }, [profileId, range])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId, auth])
 
   const retrySession = () => {
     setSessionError(undefined)
     setAuth("checking-session")
-    const ctrl = new AbortController()
-    sessionCtrlRef.current = ctrl
-    void (async () => {
-      const res = await getDashboard(profileId, range, ctrl.signal)
-      if (ctrl.signal.aborted) return
-      if (res.ok) {
-        setInitialPayload(res.value)
-        setAuth("authenticated")
-      } else if (res.code === "unauthorized") {
-        setAuth("unauthenticated")
-      } else {
-        setSessionError(res.message)
-      }
-    })()
   }
 
   const onSubmit = async (e: React.FormEvent) => {
@@ -108,6 +98,15 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
     setAuth("unauthenticated")
     setFormError(res.message)
   }
+
+  // Unmount cleanup: abort any in-flight session/login request.
+  // This covers the key={profileId} remount case: when profileId changes,
+  // the old AuthGate unmounts and all in-flight requests are aborted.
+  useEffect(() => {
+    return () => {
+      sessionCtrlRef.current?.abort()
+    }
+  }, [])
 
   if (auth === "checking-session") {
     if (sessionError) return <NetworkError message={sessionError} onRetry={retrySession} />

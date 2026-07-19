@@ -340,6 +340,26 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
           }
         }
         normalizedForCache = merged
+        // P1.1: Also merge dynamicSubscriptions by id - union providerMetricIds
+        // so the projection layer still finds the preserved old metrics.
+        if (result.dynamicSubscriptions !== undefined && existing.dynamicSubscriptions !== undefined) {
+          const existingById = new Map(existing.dynamicSubscriptions.map((ds) => [ds.id, ds]))
+          dynamicSubsForCache = result.dynamicSubscriptions.map((newDs) => {
+            const oldDs = existingById.get(newDs.id)
+            if (oldDs === undefined) return newDs
+            // Union: preserve old IDs not in new, add new IDs
+            const newIds = new Set(newDs.providerMetricIds)
+            const preservedOld = oldDs.providerMetricIds.filter((id) => !newIds.has(id))
+            return { ...newDs, providerMetricIds: [...newDs.providerMetricIds, ...preservedOld] }
+          })
+          // Also preserve any old subs not in result (e.g. adapter dropped one entirely)
+          const newIds = new Set(result.dynamicSubscriptions.map((ds) => ds.id))
+          for (const [id, oldDs] of existingById) {
+            if (!newIds.has(id)) {
+              dynamicSubsForCache = [...(dynamicSubsForCache ?? []), oldDs]
+            }
+          }
+        }
       }
     }
 

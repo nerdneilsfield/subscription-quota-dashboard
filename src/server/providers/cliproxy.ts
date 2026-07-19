@@ -200,12 +200,12 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
         return { ...base, metrics, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}) }
       }
 
-      // Collect preserveMetricIds: for failed subscriptions, signal the
+      // Collect preserveSubscriptionIds: for failed subscriptions, signal the
       // refresh service to preserve old metrics (excluding the error metric)
       // from the previous cache.
-      const preserveMetricIds = failedSubscriptionIds.length > 0 ? failedSubscriptionIds : undefined
+      const preserveSubscriptionIds = failedSubscriptionIds.length > 0 ? failedSubscriptionIds : undefined
       return { ...base, metrics, dynamicSubscriptions, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}),
-        ...(preserveMetricIds !== undefined ? { preserveMetricIds } : {}) }
+        ...(preserveSubscriptionIds !== undefined ? { preserveSubscriptionIds } : {}) }
     },
   }
 }

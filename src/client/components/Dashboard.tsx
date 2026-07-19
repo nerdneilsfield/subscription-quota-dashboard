@@ -33,8 +33,15 @@ interface DashboardProps {
 }
 
 export function Dashboard({ profileId, range, initialPayload, onSessionExpired, onRangeChange }: DashboardProps) {
-  const [payload, setPayload] = useState<DashboardPayload | undefined>(initialPayload)
-  const [phase, setPhase] = useState<Phase>(initialPayload ? "ready" : "loading")
+  // Validate initialPayload identity BEFORE useState init to prevent
+  // a one-frame flash of stale range/profile data.
+  const validInitialPayload = initialPayload
+    && initialPayload.profile?.id === profileId
+    && initialPayload.selectedRange === range
+    ? initialPayload
+    : undefined
+  const [payload, setPayload] = useState<DashboardPayload | undefined>(validInitialPayload)
+  const [phase, setPhase] = useState<Phase>(validInitialPayload ? "ready" : "loading")
   const [error, setError] = useState<ApiFailure | undefined>()
   const [rangeLoading, setRangeLoading] = useState(false)
   // Ref mirror of rangeLoading so doRefresh can read it without depending on it.
@@ -57,7 +64,7 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
 
   // "now" snaps to the server's generatedAt when a payload arrives, then
   // ticks every 30s via wall-clock so relative times advance.
-  const [now, setNow] = useState(() => payload ? new Date(payload.generatedAt) : new Date())
+  const [now, setNow] = useState(() => validInitialPayload ? new Date(validInitialPayload.generatedAt) : new Date())
   useEffect(() => {
     if (payload) setNow(new Date(payload.generatedAt))
   }, [payload])
@@ -121,23 +128,15 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
   useEffect(() => {
     const isFirst = !initRef.current
     initRef.current = true
-    if (isFirst && initialPayload) {
-      // Validate that the initialPayload matches the current profile and range.
-      // If it doesn't (e.g. AuthGate captured an old range before auth), fetch fresh.
-      const profileMatch = initialPayload.profile?.id === profileId
-      const rangeMatch = initialPayload.selectedRange === range
-      if (profileMatch && rangeMatch) {
-        setPayload(initialPayload)
-        setPhase("ready")
-        return
-      }
-      // Mismatch: fall through to fetch
+    if (isFirst && validInitialPayload) {
+      // Already initialized via useState with validated payload.
+      return
     }
     void fetchRange(range, isFirst ? "initial" : "range")
     return () => {
       abortRef.current?.abort()
     }
-  }, [range, initialPayload, fetchRange, profileId])
+  }, [range, validInitialPayload, fetchRange, profileId])
 
   // visibility refetch (no auto-poll)
   useEffect(() => {

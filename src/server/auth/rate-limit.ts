@@ -30,31 +30,32 @@ export function createRateLimiter(options: RateLimiterOptions = {}): RateLimiter
   }
 
   // Evict expired keys to prevent unbounded Map growth. If the Map is still
-  // at capacity after eviction, fall back to a shared "overflow" bucket so
-  // new keys don't increase memory usage (they share the overflow entry).
+  // at capacity after eviction, unseen keys fall back to a shared "overflow"
+  // bucket. Existing keys ALWAYS use their own bucket (no cross-contamination).
   const OVERFLOW_KEY = "__overflow__"
-  function evictOrOverflow(t: number, key: string): string {
+  function resolveKey(key: string, t: number): string {
+    // Existing keys always use their own bucket.
+    if (buckets.has(key)) return key
+    // New key: check capacity.
     if (buckets.size < maxKeys) return key
-    // Try evicting expired keys first.
-    let evicted = 0
+    // At capacity: try evicting expired keys first.
     for (const [k, times] of buckets) {
       const pruned = prune(times, t)
       if (pruned.length === 0) {
         buckets.delete(k)
-        evicted++
       } else {
         buckets.set(k, pruned)
       }
     }
     if (buckets.size < maxKeys) return key
-    // Still full: route to overflow bucket to prevent unbounded growth.
+    // Still full: route unseen key to shared overflow bucket.
     return OVERFLOW_KEY
   }
 
   return {
     check(key: string): boolean {
       const t = now()
-      const effectiveKey = evictOrOverflow(t, key)
+      const effectiveKey = resolveKey(key, t)
       const times = prune(buckets.get(effectiveKey) ?? [], t)
       if (times.length >= maxAttempts) {
         buckets.set(effectiveKey, times)
@@ -65,8 +66,8 @@ export function createRateLimiter(options: RateLimiterOptions = {}): RateLimiter
       return true
     },
     reset(key: string): void {
+      // Only delete the key's own bucket. Don't touch overflow - it's shared.
       buckets.delete(key)
-      buckets.delete(OVERFLOW_KEY)
     },
     count(key: string): number {
       const t = now()

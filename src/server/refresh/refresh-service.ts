@@ -323,33 +323,35 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       }
     } else if ((result.errors ?? []).length > 0 && result.metrics.length > 0) {
       // Partial failure: merge returned metrics into last-known-good.
-      // Use the adapter's explicit preserveMetricIds (subscription IDs whose
-      // old metrics should be preserved) if available. Otherwise fall back
-      // to inference: preserve old metrics for subscriptions not returned.
+      // Use the adapter's explicit preserveSubscriptionIds (subscription IDs
+      // whose old metrics should be preserved) if available. Otherwise fall
+      // back to inference: preserve old metrics for subscriptions not returned.
       const existing = storage.providerCache.get(paId)
       if (existing) {
         const returnedIds = new Set(result.metrics.map((m) => (m as NormalizedMetric).providerMetricId))
 
-        // If adapter provided preserveMetricIds (subscription IDs), preserve
-        // old metrics belonging to those subscriptions. Otherwise, preserve
-        // old metrics for subscriptions NOT returned this cycle.
-        const failedSubIds = result.preserveMetricIds
-          ? new Set(result.preserveMetricIds)
+        const failedSubIds = result.preserveSubscriptionIds
+          ? new Set(result.preserveSubscriptionIds)
           : null
 
+        // Map: subscription ID -> set of old providerMetricIds to preserve
+        const preserveBySubId = new Map<string, Set<string>>()
         const oldIdsToPreserve = new Set<string>()
         if (existing.dynamicSubscriptions) {
           for (const oldDs of existing.dynamicSubscriptions) {
             let shouldPreserve: boolean
             if (failedSubIds !== null) {
-              // Explicit: preserve only if this sub ID is in the failed set.
               shouldPreserve = failedSubIds.has(oldDs.id)
             } else {
-              // Inference: preserve if this sub was NOT returned this cycle.
               shouldPreserve = !result.dynamicSubscriptions?.some((nds) => nds.id === oldDs.id)
             }
             if (shouldPreserve) {
-              for (const id of oldDs.providerMetricIds) oldIdsToPreserve.add(id)
+              const idSet = new Set<string>()
+              for (const id of oldDs.providerMetricIds) {
+                oldIdsToPreserve.add(id)
+                idSet.add(id)
+              }
+              preserveBySubId.set(oldDs.id, idSet)
             }
           }
         }
@@ -361,14 +363,20 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
         merged.push(...(result.metrics as Array<Record<string, unknown>>))
         normalizedForCache = merged
 
-        // dynamicSubscriptions: if discovery succeeded (not aborted), the
-        // current cycle's subscriptions are authoritative. Old subscriptions
-        // not returned this cycle were likely deleted/disabled/filtered and
-        // should NOT be revived. Only preserve old subs if discovery itself
-        // failed (result.dynamicSubscriptions === undefined, handled by coalesce).
-        // -> Use result.dynamicSubscriptions verbatim (it's defined here since
-        //    we're in the partial branch where metrics > 0 + errors > 0).
-        dynamicSubsForCache = result.dynamicSubscriptions
+        // dynamicSubscriptions: discovery succeeded -> current subs are
+        // authoritative. But for failed subs, union the preserved old metric
+        // IDs back into their providerMetricIds so the projection layer
+        // can still find the preserved metrics.
+        if (result.dynamicSubscriptions) {
+          dynamicSubsForCache = result.dynamicSubscriptions.map((ds) => {
+            const preserved = preserveBySubId.get(ds.id)
+            if (preserved === undefined) return ds
+            // Union: new IDs + preserved old IDs not in new set
+            const newIds = new Set(ds.providerMetricIds)
+            const preservedOnly = [...preserved].filter((id) => !newIds.has(id))
+            return { ...ds, providerMetricIds: [...ds.providerMetricIds, ...preservedOnly] }
+          })
+        }
       }
     }
 

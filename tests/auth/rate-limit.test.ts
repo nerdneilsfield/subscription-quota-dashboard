@@ -45,4 +45,34 @@ describe("createRateLimiter", () => {
     limiter.reset("a")
     expect(limiter.check("a")).toBe(true)
   })
+
+  test("existing keys bypass overflow when Map is full", () => {
+    let t = 0
+    const limiter = createRateLimiter({ now: () => t, maxKeys: 2, maxAttempts: 1, windowMs: 60_000 })
+    // Fill to capacity with 2 keys
+    expect(limiter.check("a")).toBe(true)
+    expect(limiter.check("b")).toBe(true)
+    // Key 'a' is existing - should still use its own bucket and be blocked
+    expect(limiter.check("a")).toBe(false)
+    // Key 'c' is new - should go to overflow bucket
+    // Overflow is empty so first check passes
+    expect(limiter.check("c")).toBe(true)
+    // Second overflow check is blocked
+    expect(limiter.check("d")).toBe(false)
+  })
+
+  test("reset only clears the key's own bucket, not overflow", () => {
+    let t = 0
+    const limiter = createRateLimiter({ now: () => t, maxKeys: 1, maxAttempts: 1, windowMs: 60_000 })
+    // Fill capacity
+    expect(limiter.check("a")).toBe(true)
+    // New key 'b' goes to overflow, first attempt passes
+    expect(limiter.check("b")).toBe(true)
+    // Another new key 'c' goes to overflow, blocked (overflow full)
+    expect(limiter.check("c")).toBe(false)
+    // Reset 'a' should NOT clear overflow
+    limiter.reset("a")
+    // Overflow is still blocked
+    expect(limiter.check("d")).toBe(false)
+  })
 })

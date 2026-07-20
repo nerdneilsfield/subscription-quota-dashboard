@@ -56,12 +56,12 @@ export type ProviderRefreshResult = {
   nextImportState?: { maxCreationTime?: number; importedQueryIdsAtMaxCreationTime: string[] }
   errors?: Array<{ message: string; retryable: boolean }>
   dynamicSubscriptions?: DynamicSubscription[]
-  // Subscription IDs from the PREVIOUS cache that should be preserved this
+  // Specific metric IDs from the PREVIOUS cache that should be preserved this
   // cycle because the adapter couldn't refresh them (partial failure). When
-  // present, the refresh service preserves old metrics belonging to these
-  // subscriptions from the previous cache instead of guessing based on
-  // subscription presence.
-  preserveSubscriptionIds?: string[]
+  // present, the refresh service preserves only these exact metric IDs from
+  // the old cache, not entire subscriptions. This allows per-endpoint
+  // granularity (e.g. preserve xai:auth:weekly but not xai:auth:on_demand).
+  preserveMetricIds?: string[]
 }
 
 export type ProviderAdapter = {

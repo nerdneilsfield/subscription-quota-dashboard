@@ -214,7 +214,7 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
       // IP rate-limit check (before body parsing)
       const ip = clientIp(c)
       const rateLimitKey = `login:${ip}:${profileId}`
-      if (!loginRateLimiter.check(rateLimitKey)) {
+      if (!loginRateLimiter.peek(rateLimitKey)) {
         c.header("Retry-After", String(5 * 60))
         return c.json({ error: "rate_limited" }, 429)
       }
@@ -251,6 +251,10 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
     }
 
     if (!viewKey || !verifyViewKey(profile, viewKey)) {
+      // Record failure against rate limiter (overflow-safe: only records on
+      // the resolved bucket, never clears it on success).
+      const rateLimitKey = c.get("loginRateLimitKey") as string | undefined
+      if (rateLimitKey) loginRateLimiter.recordFailure(rateLimitKey)
       return c.json({ error: "unauthorized" }, 401)
     }
 

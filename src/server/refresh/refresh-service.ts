@@ -323,35 +323,43 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       }
     } else if ((result.errors ?? []).length > 0 && result.metrics.length > 0) {
       // Partial failure: merge returned metrics into last-known-good.
-      // Use the adapter's explicit preserveSubscriptionIds (subscription IDs
-      // whose old metrics should be preserved) if available. Otherwise fall
-      // back to inference: preserve old metrics for subscriptions not returned.
+      // Use the adapter's explicit preserveMetricIds (metric ID prefixes)
+      // for per-endpoint granularity if available. Otherwise fall back to
+      // inference: preserve old metrics for subscriptions not returned.
       const existing = storage.providerCache.get(paId)
       if (existing) {
         const returnedIds = new Set(result.metrics.map((m) => (m as NormalizedMetric).providerMetricId))
 
-        const failedSubIds = result.preserveSubscriptionIds
-          ? new Set(result.preserveSubscriptionIds)
-          : null
+        // preserveMetricIds contains prefixes like "codex:abc123:" - we
+        // preserve old metrics whose ID starts with any of these prefixes.
+        const failedPrefixes = result.preserveMetricIds ?? null
 
         // Map: subscription ID -> set of old providerMetricIds to preserve
         const preserveBySubId = new Map<string, Set<string>>()
         const oldIdsToPreserve = new Set<string>()
         if (existing.dynamicSubscriptions) {
           for (const oldDs of existing.dynamicSubscriptions) {
-            let shouldPreserve: boolean
-            if (failedSubIds !== null) {
-              shouldPreserve = failedSubIds.has(oldDs.id)
-            } else {
-              shouldPreserve = !result.dynamicSubscriptions?.some((nds) => nds.id === oldDs.id)
-            }
-            if (shouldPreserve) {
-              const idSet = new Set<string>()
-              for (const id of oldDs.providerMetricIds) {
-                oldIdsToPreserve.add(id)
-                idSet.add(id)
+            // Determine which of this sub's old metric IDs to preserve.
+            const idsToPreserve = new Set<string>()
+            for (const oldId of oldDs.providerMetricIds) {
+              let shouldPreserve = false
+              if (failedPrefixes !== null) {
+                // Explicit: preserve if the old metric ID starts with any
+                // failed prefix AND it's not returned this cycle.
+                shouldPreserve = !returnedIds.has(oldId)
+                  && failedPrefixes.some((pfx) => oldId.startsWith(pfx))
+              } else {
+                // Inference: preserve if this sub was NOT returned this cycle.
+                const wasReturned = result.dynamicSubscriptions?.some((nds) => nds.id === oldDs.id) ?? false
+                shouldPreserve = !wasReturned
               }
-              preserveBySubId.set(oldDs.id, idSet)
+              if (shouldPreserve) {
+                idsToPreserve.add(oldId)
+                oldIdsToPreserve.add(oldId)
+              }
+            }
+            if (idsToPreserve.size > 0) {
+              preserveBySubId.set(oldDs.id, idsToPreserve)
             }
           }
         }

@@ -113,9 +113,10 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       const metrics: NormalizedMetric[] = []
       const dynamicSubscriptions: DynamicSubscription[] = []
       const adapterErrors: Array<{ message: string; retryable: boolean }> = []
-      // Track which subscriptions had errors this cycle so the refresh service
-      // knows to preserve their old quota metrics from the cache.
-      const failedSubscriptionIds: string[] = []
+      // Track which metric ID prefixes had errors this cycle so the refresh
+      // service knows to preserve old metrics with those prefixes.
+      const failedMetricPrefixes: string[] = []
+      const preservedMetricIds: string[] = []
       let aborted = false // tracks whether fast-fail or deadline caused early exit
 
       for (let i = 0; i < accounts.length; i += API_CALL_CONCURRENCY) {
@@ -157,16 +158,20 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
           }
           metrics.push(...accountMetrics)
           dynamicSubscriptions.push(makeDynSub(acct, accountMetrics.map(m => m.providerMetricId)))
-          // If this account had an error but previously had quota metrics,
-          // mark the old quota metric IDs for preservation so the refresh
-          // service doesn't drop them. Only the real metrics (not the error
-          // metric) need preservation - the error metric is new this cycle.
+          // If this account had an error, preserve the real metric IDs (not
+          // the error metric) from the previous cache. We know the metric
+          // ID prefix pattern: provider:authIndex:metricName.
           if (hasError) {
-            // The old metric IDs follow the pattern: provider:authIndex:metricName
-            // We don't know exact names, but the refresh service will match by
-            // subscription id + any old IDs not in the new set.
-            // Signal preservation by recording the subscription as "failed".
-            failedSubscriptionIds.push(`cliproxy:${acct.provider}:${acct.authIndex}`)
+            const prefix = `${acct.provider}:${acct.authIndex}:`
+            for (const m of r.metrics) {
+              // These are the real metrics returned this cycle - preserve
+              // any old ones with the same prefix that aren't in this set.
+              preservedMetricIds.push(m.providerMetricId)
+            }
+            // Mark prefix for refresh-service to find all old metrics with
+            // this prefix not present in this cycle's returned metrics.
+            // We push the prefix as a marker (refresh-service will match).
+            failedMetricPrefixes.push(prefix)
           }
         }
 
@@ -184,7 +189,7 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
             metrics.push(errorMetric)
             dynamicSubscriptions.push(makeDynSub(acct, [errorMetric.providerMetricId]))
             adapterErrors.push({ message: `${acct.provider}:${acct.authIndex}: skipped (batch auth failure)`, retryable: false })
-            failedSubscriptionIds.push(`cliproxy:${acct.provider}:${acct.authIndex}`)
+            failedMetricPrefixes.push(`${acct.provider}:${acct.authIndex}:`)
           }
           break
         }
@@ -200,12 +205,12 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
         return { ...base, metrics, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}) }
       }
 
-      // Collect preserveSubscriptionIds: for failed subscriptions, signal the
-      // refresh service to preserve old metrics (excluding the error metric)
-      // from the previous cache.
-      const preserveSubscriptionIds = failedSubscriptionIds.length > 0 ? failedSubscriptionIds : undefined
+      // Collect preserveMetricIds: for failed accounts/endpoints, signal the
+      // refresh service to preserve old metrics with matching prefixes from
+      // the previous cache (per-endpoint granularity, not per-subscription).
+      const preserveMetricIds = failedMetricPrefixes.length > 0 ? failedMetricPrefixes : undefined
       return { ...base, metrics, dynamicSubscriptions, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}),
-        ...(preserveSubscriptionIds !== undefined ? { preserveSubscriptionIds } : {}) }
+        ...(preserveMetricIds !== undefined ? { preserveMetricIds } : {}) }
     },
   }
 }

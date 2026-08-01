@@ -114,7 +114,10 @@ export function verifySessionCookie(
   }
 }
 
-export function resolveSessionSecret(env: Record<string, string | undefined>): ResolvedSecret {
+export function resolveSessionSecret(
+  env: Record<string, string | undefined>,
+  warn: (message: string) => void = console.warn,
+): ResolvedSecret {
   const provided = env["SESSION_SECRET"]
   if (provided !== undefined && provided !== "") {
     return { secret: provided, generated: false }
@@ -123,7 +126,7 @@ export function resolveSessionSecret(env: Record<string, string | undefined>): R
     throw new Error("SESSION_SECRET must be set when NODE_ENV=production")
   }
   const generated = randomBytes(32).toString("hex")
-  console.warn(
+  warn(
     "[auth] SESSION_SECRET is not set; generated an ephemeral dev secret. " +
       "This MUST NOT happen in production.",
   )

@@ -33,6 +33,8 @@ import {
   type UsageFilter,
 } from "../dashboard/project"
 import { buildMetricKey } from "../../shared/metric-key"
+import { silentLogger, type Logger } from "../logging/logger"
+import { runWithLogger } from "../logging/context"
 
 const RANGE_MS: Record<RangeKey, number> = {
   "1h": 3_600_000,
@@ -41,7 +43,7 @@ const RANGE_MS: Record<RangeKey, number> = {
   "30d": 2_592_000_000,
 }
 
-export type RefreshRequest = { profileId: string; ip: string; range?: RangeKey }
+export type RefreshRequest = { profileId: string; ip: string; range?: RangeKey; requestId?: string }
 
 export type RefreshOutcome =
   | { status: "ok"; payload: DashboardPayload }
@@ -62,6 +64,7 @@ export type RefreshServiceDeps = {
   now: () => Date
   rateLimiter?: RateLimiter
   concurrencyLimit?: number
+  logger?: Logger
 }
 
 type SubscriptionMetric = { subscriptionId: string; metric: MetricConfig }
@@ -78,6 +81,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
   const { config, storage, providers, now } = deps
   const concurrencyLimit = deps.concurrencyLimit ?? 8
   const rateLimiter = deps.rateLimiter
+  const logger = (deps.logger ?? silentLogger).child({ component: "refresh" })
 
   // Singleflight: in-flight provider-account refresh promises.
   const inFlight = new Map<string, Promise<AccountRefreshOutcome>>()
@@ -88,14 +92,18 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
   async function acquireSlot(): Promise<void> {
     if (active < concurrencyLimit) {
       active++
+      logger.debug("refresh.slot.acquired", { active, concurrencyLimit, queued: waitQueue.length })
       return
     }
+    logger.debug("refresh.slot.queued", { active, concurrencyLimit, queued: waitQueue.length + 1 })
     await new Promise<void>((resolve) => waitQueue.push(resolve))
     active++
+    logger.debug("refresh.slot.acquired", { active, concurrencyLimit, queued: waitQueue.length })
   }
 
   function releaseSlot(): void {
     active--
+    logger.debug("refresh.slot.released", { active, concurrencyLimit, queued: waitQueue.length })
     const next = waitQueue.shift()
     if (next !== undefined) next()
   }
@@ -131,39 +139,69 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
 
   // Refresh ONE provider account (singleflight + concurrency cap + adapter call).
   // No rate-limiting here: the caller decides token consumption.
-  function refreshProviderAccount(paId: string, staleCache: ProviderCacheRecord | undefined): Promise<AccountRefreshOutcome> {
+  function refreshProviderAccount(paId: string, staleCache: ProviderCacheRecord | undefined, operationLogger: Logger): Promise<AccountRefreshOutcome> {
     const existing = inFlight.get(paId)
     if (existing !== undefined) {
+      operationLogger.debug("refresh.provider.singleflight_joined", { providerAccountId: paId })
       return existing.then((o) => o.ok ? { ok: true, result: o.result, fresh: false, hadErrors: o.hadErrors } : { ok: false, error: o.error })
     }
 
     const providerAccount = config.providers.get(paId)
     const adapter = providerAccount ? providers.get(providerAccount.type) : undefined
     const allMetrics = collectSubscriptionMetricsForAccount(paId)
+    const providerLogger = operationLogger.child({
+      providerAccountId: paId,
+      providerType: providerAccount?.type ?? "unknown",
+    })
 
     const promise = (async (): Promise<AccountRefreshOutcome> => {
       if (!providerAccount || !adapter) {
-        return { ok: false, error: `no adapter configured for provider account ${paId}` }
+        const error = `no adapter configured for provider account ${paId}`
+        providerLogger.error("refresh.provider.missing_adapter", { error })
+        return { ok: false, error }
       }
       await acquireSlot()
+      const startedAt = performance.now()
       try {
         const runtime = config.providerRuntime.get(paId) ?? { available: false }
         const prevImport = storage.importState.get(paId)
+        providerLogger.info("refresh.provider.started", {
+          runtimeAvailable: runtime.available,
+          configuredMetricCount: allMetrics.length,
+          hasStaleCache: staleCache !== undefined,
+          previousCacheStatus: staleCache?.status,
+          hasImportState: prevImport !== undefined,
+        })
         const input: ProviderRefreshInput = {
           providerAccountId: paId,
           provider: providerAccount,
           runtime,
           now: now().toISOString(),
           metrics: allMetrics.map((m) => m.metric),
+          logger: providerLogger,
           ...(prevImport !== undefined
             ? { importState: buildImportStateInput(prevImport) }
             : {}),
         }
-        const result = await adapter.refresh(input)
+        const result = await runWithLogger(providerLogger, () => adapter.refresh(input))
         const hadErrors = (result.errors ?? []).length > 0
+        const fields = {
+          durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+          metricCount: result.metrics.length,
+          historyEventCount: result.historyEvents?.length ?? 0,
+          dynamicSubscriptionCount: result.dynamicSubscriptions?.length ?? 0,
+          errorCount: result.errors?.length ?? 0,
+          errors: result.errors ?? [],
+        }
+        if (hadErrors) providerLogger.warn("refresh.provider.completed_with_errors", fields)
+        else providerLogger.info("refresh.provider.completed", fields)
         return { ok: true, result, fresh: true, hadErrors }
       } catch (e) {
         const message = e instanceof Error ? e.message : "provider refresh failed"
+        providerLogger.error("refresh.provider.failed", {
+          durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+          error: e instanceof Error ? e : message,
+        })
         return { ok: false, error: message }
       } finally {
         releaseSlot()
@@ -176,10 +214,14 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
         // Persist the fresh result inside a transaction.
         try {
           writeProviderResult(paId, outcome.result, allMetrics)
+          providerLogger.debug("refresh.provider.persisted", {
+            metricCount: outcome.result.metrics.length,
+            dynamicSubscriptionCount: outcome.result.dynamicSubscriptions?.length ?? 0,
+          })
         } catch (writeErr) {
           // Storage write failure must not crash the refresh scheduler.
           const msg = writeErr instanceof Error ? writeErr.message : "storage write failed"
-          console.error(`writeProviderResult failed for ${paId}: ${msg}`)
+          providerLogger.error("refresh.provider.persist_failed", { error: writeErr instanceof Error ? writeErr : msg })
           return { ok: false, error: msg }
         }
       }
@@ -398,6 +440,19 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       ...(dynamicSubsForCache !== undefined ? { dynamicSubscriptions: dynamicSubsForCache } : {}),
     }
 
+    logger.debug("refresh.storage.write_started", {
+      providerAccountId: paId,
+      cacheStatus,
+      returnedMetricCount: result.metrics.length,
+      cachedMetricCount: normalizedForCache.length,
+      dynamicSubscriptionCount: dynamicSubsForCache?.length ?? 0,
+      snapshotCount: snapshotRows.length,
+      historyEventCount: historyRows.length,
+      errorCount: result.errors?.length ?? 0,
+      preservesPreviousTimestamps: cacheFetchedAt !== result.fetchedAt,
+      preserveMetricPrefixes: result.preserveMetricIds ?? [],
+    })
+
     storage.transaction(() => {
       storage.providerCache.upsert(cacheRecord)
       storage.snapshots.insertMany(snapshotRows)
@@ -411,17 +466,33 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
         })
       }
     })
+    logger.debug("refresh.storage.write_completed", {
+      providerAccountId: paId,
+      cacheStatus,
+      snapshotCount: snapshotRows.length,
+      historyEventCount: historyRows.length,
+    })
   }
 
   async function refreshProfile(req: RefreshRequest): Promise<RefreshOutcome> {
+    const operationLogger = logger.child({
+      ...(req.requestId !== undefined ? { requestId: req.requestId } : {}),
+      profileId: req.profileId,
+    })
+    const startedMonotonic = performance.now()
     const profile = config.profiles.get(req.profileId)
-    if (!profile) return { status: "fatal", error: "unknown profile" }
+    if (!profile) {
+      operationLogger.warn("refresh.profile.unknown", {})
+      return { status: "fatal", error: "unknown profile" }
+    }
 
     const range: RangeKey = req.range ?? "24h"
     const paIds = collectVisibleProviderAccounts(req.profileId)
+    operationLogger.info("refresh.profile.started", { range, providerAccountIds: paIds, providerCount: paIds.length })
     if (paIds.length === 0) {
       // No provider accounts to refresh: return current payload.
       const payload = buildPayloadFromStorage(req.profileId, now().toISOString(), range)
+      operationLogger.info("refresh.profile.completed", { status: "ok", durationMs: 0, providerCount: 0 })
       return { status: "ok", payload }
     }
 
@@ -432,6 +503,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
         if (rateLimiter) {
           const key = `${req.ip}:${req.profileId}:${paId}`
           if (!rateLimiter.check(key)) {
+            operationLogger.warn("refresh.profile.rate_limited", { providerAccountId: paId, ip: req.ip })
             return { status: "rate_limited", providerAccountId: paId }
           }
         }
@@ -444,12 +516,17 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       const c = storage.providerCache.get(paId)
       if (c) staleCaches.set(paId, c)
     }
+    operationLogger.debug("refresh.profile.cache_loaded", {
+      cachedProviderAccountIds: [...staleCaches.keys()],
+      cacheStatuses: Object.fromEntries([...staleCaches].map(([id, cache]) => [id, cache.status])),
+    })
 
     const startedAt = now().toISOString()
     const runId = storage.refreshRuns.insertStarted({ startedAt, providerAccountIds: paIds })
+    operationLogger.debug("refresh.run.persisted_start", { runId, startedAt })
 
     const outcomes = await Promise.all(
-      paIds.map((paId) => refreshProviderAccount(paId, staleCaches.get(paId))),
+      paIds.map((paId) => refreshProviderAccount(paId, staleCaches.get(paId), operationLogger)),
     )
 
     const errors: Array<{ message: string }> = []
@@ -474,6 +551,17 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       status: errors.length === 0 && warnings.length === 0 ? "ok" : "error",
       errors,
     })
+    const durationMs = Math.round((performance.now() - startedMonotonic) * 100) / 100
+    const summaryFields = {
+      runId,
+      durationMs,
+      providerCount: paIds.length,
+      okCount: outcomes.filter((outcome) => outcome.ok && !outcome.hadErrors).length,
+      warningCount: warnings.length,
+      errorCount: errors.length,
+      warnings,
+      errors,
+    }
 
     const payload = buildPayloadFromStorage(req.profileId, now().toISOString(), range)
 
@@ -481,19 +569,25 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       // If a stale cache exists for at least one account, serve degraded.
       if (paIds.some((paId) => staleCaches.has(paId))) {
         const safeError = errors.map((e) => e.message).join("; ")
+        operationLogger.warn("refresh.profile.completed", { ...summaryFields, status: "degraded", error: safeError })
         return { status: "degraded", payload, error: safeError }
       }
-      return { status: "fatal", error: errors.map((e) => e.message).join("; ") }
+      const error = errors.map((e) => e.message).join("; ")
+      operationLogger.error("refresh.profile.completed", { ...summaryFields, status: "fatal", error })
+      return { status: "fatal", error }
     }
     if (errors.length > 0) {
       const safeError = errors.map((e) => e.message).join("; ")
+      operationLogger.warn("refresh.profile.completed", { ...summaryFields, status: "degraded", error: safeError })
       return { status: "degraded", payload, error: safeError }
     }
     if (warnings.length > 0) {
       const safeWarning = warnings.join("; ")
+      operationLogger.warn("refresh.profile.completed", { ...summaryFields, status: "degraded", error: safeWarning })
       return { status: "degraded", payload, error: safeWarning }
     }
 
+    operationLogger.info("refresh.profile.completed", { ...summaryFields, status: "ok" })
     return { status: "ok", payload }
   }
 

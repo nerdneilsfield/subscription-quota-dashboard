@@ -3,6 +3,7 @@ import { getConnInfo } from "@hono/node-server/conninfo"
 import { bodyLimit } from "hono/body-limit"
 import { readFileSync, existsSync } from "node:fs"
 import { join, extname } from "node:path"
+import { randomUUID } from "node:crypto"
 import type { NormalizedConfig } from "../../shared/domain"
 import type { RangeKey } from "../../shared/domain"
 import type { DashboardStorage } from "../storage/repositories"
@@ -21,6 +22,13 @@ import {
 } from "./security"
 import { resolveClientIp } from "./client-ip"
 import { createRefreshService } from "../refresh/refresh-service"
+import { silentLogger, type Logger } from "../logging/logger"
+
+type AppVariables = {
+  loginRateLimitKey: string
+  requestId: string
+  requestLogger: Logger
+}
 
 export type AppDeps = {
   config: NormalizedConfig
@@ -32,6 +40,7 @@ export type AppDeps = {
   environment?: "development" | "production" | "test"
   trustedProxies?: string[]
   publicOrigin?: string
+  logger?: Logger
 }
 
 const VALID_RANGES: ReadonlySet<string> = new Set(["1h", "24h", "7d", "30d"])
@@ -102,8 +111,55 @@ function originAllowed(origin: string | undefined, c: Context, isProduction: boo
   return false
 }
 
-export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey: string } }> {
-  const app = new Hono<{ Variables: { loginRateLimitKey: string } }>()
+export function createApp(deps?: AppDeps): Hono<{ Variables: AppVariables }> {
+  const app = new Hono<{ Variables: AppVariables }>()
+  const logger = deps?.logger ?? silentLogger
+  const trustedProxies = new Set(deps?.trustedProxies ?? [])
+
+  function clientIp(c: Context): string {
+    const xff = c.req.header("x-forwarded-for")
+    let socketIp: string | undefined
+    try {
+      socketIp = getConnInfo(c).remote.address
+    } catch {
+      socketIp = undefined
+    }
+    return resolveClientIp(socketIp, xff, trustedProxies)
+  }
+
+  app.use("*", async (c, next) => {
+    const suppliedRequestId = c.req.header("x-request-id")?.trim()
+    const requestId = suppliedRequestId && suppliedRequestId.length <= 128 ? suppliedRequestId : randomUUID()
+    const requestLogger = logger.child({ component: "http", requestId })
+    const startedAt = performance.now()
+    c.set("requestId", requestId)
+    c.set("requestLogger", requestLogger)
+    c.header("X-Request-Id", requestId)
+    requestLogger.debug("http.request.received", {
+      method: c.req.method,
+      path: c.req.path,
+      queryKeys: [...new URL(c.req.url).searchParams.keys()],
+      origin: c.req.header("origin"),
+      userAgent: c.req.header("user-agent"),
+      ip: clientIp(c),
+    })
+    try {
+      await next()
+    } catch (error) {
+      requestLogger.error("http.request.unhandled_error", { method: c.req.method, path: c.req.path, error })
+      throw error
+    } finally {
+      const fields = {
+        method: c.req.method,
+        path: c.req.path,
+        status: c.res.status,
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      }
+      if (c.res.status >= 500) requestLogger.error("http.request.completed", fields)
+      else if (c.res.status >= 400) requestLogger.warn("http.request.completed", fields)
+      else requestLogger.info("http.request.completed", fields)
+    }
+  })
 
   app.use("*", async (c, next) => {
     await next()
@@ -125,7 +181,6 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
   const now = deps.now ?? (() => new Date())
   const nowMs = (): number => now().getTime()
   const secure = deps.environment === "production"
-  const trustedProxies = new Set(deps.trustedProxies ?? [])
   const publicOrigin = deps.publicOrigin
   const loginRateLimiter = createRateLimiter({
     maxAttempts: 5,
@@ -138,27 +193,13 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
     storage: deps.storage,
     providers: deps.providers,
     now,
+    logger,
     rateLimiter: createRateLimiter({
       maxAttempts: 1,
       windowMs: 30_000,
       now: nowMs,
     }),
   })
-
-  function clientIp(c: Context): string {
-    const xff = c.req.header("x-forwarded-for")
-    // Use @hono/node-server's getConnInfo for the real socket address.
-    // In test mode (app.request without a real server), c.env may not have
-    // the server binding; fall back to XFF or "unknown".
-    let socketIp: string | undefined
-    try {
-      socketIp = getConnInfo(c).remote.address
-    } catch {
-      // c.env.server not available (test mode) - use XFF first entry or unknown
-      socketIp = undefined
-    }
-    return resolveClientIp(socketIp, xff, trustedProxies)
-  }
 
   // Cache-Control: no-store on all API responses.
   app.use("/api/*", async (c, next) => {
@@ -168,23 +209,40 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
 
   // Helper: authenticate a request against a profile (cookie OR bearer).
   function authenticate(c: Context, profileId: string): Response | null {
+    const requestLogger = c.get("requestLogger") as Logger
     const profile = deps!.config.profiles.get(profileId)
-    if (!profile) return unauthorized()
+    if (!profile) {
+      requestLogger.warn("auth.request.denied", { profileId, reason: "unknown_profile" })
+      return unauthorized()
+    }
     // Reject viewKey query parameter on any authenticated route.
     const url = new URL(c.req.url)
-    if (url.searchParams.get("viewKey") !== null) return unauthorized()
+    if (url.searchParams.get("viewKey") !== null) {
+      requestLogger.warn("auth.request.denied", { profileId, reason: "view_key_in_query" })
+      return unauthorized()
+    }
 
     const bearer = bearerViewKey(c.req.header("authorization"))
     if (bearer !== undefined) {
-      if (verifyViewKey(profile, bearer)) return null
+      if (verifyViewKey(profile, bearer)) {
+        requestLogger.debug("auth.request.accepted", { profileId, mechanism: "bearer" })
+        return null
+      }
+      requestLogger.warn("auth.request.denied", { profileId, reason: "invalid_bearer" })
       return unauthorized()
     }
     const cookieName = sessionCookieName(profile.id)
     const cookieHeader = c.req.header("cookie") ?? ""
     const pair = findCookiePair(cookieHeader, cookieName)
     if (pair !== undefined) {
-      if (verifySessionCookie(pair, profile, deps!.sessionSecret, nowMs())) return null
+      if (verifySessionCookie(pair, profile, deps!.sessionSecret, nowMs())) {
+        requestLogger.debug("auth.request.accepted", { profileId, mechanism: "session_cookie" })
+        return null
+      }
+      requestLogger.warn("auth.request.denied", { profileId, reason: "invalid_or_expired_cookie" })
+      return unauthorized()
     }
+    requestLogger.warn("auth.request.denied", { profileId, reason: "missing_credentials" })
     return unauthorized()
   }
 
@@ -206,15 +264,20 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
       // Map key growth from arbitrary path segments.
       const profileId = c.req.param("profileId")
       if (!deps!.config.profiles.has(profileId)) {
+        c.get("requestLogger").warn("auth.login.denied", { profileId, reason: "unknown_profile" })
         return c.json({ error: "unauthorized" }, 401)
       }
       // Origin check
       const origin = c.req.header("origin")
-      if (!originAllowed(origin, c, secure, publicOrigin, !secure)) return c.json({ error: "forbidden" }, 403)
+      if (!originAllowed(origin, c, secure, publicOrigin, !secure)) {
+        c.get("requestLogger").warn("auth.login.denied", { profileId, reason: "origin_rejected", origin })
+        return c.json({ error: "forbidden" }, 403)
+      }
       // IP rate-limit check (before body parsing)
       const ip = clientIp(c)
       const rateLimitKey = `login:${ip}:${profileId}`
       if (!loginRateLimiter.peek(rateLimitKey)) {
+        c.get("requestLogger").warn("auth.login.rate_limited", { profileId, ip })
         c.header("Retry-After", String(5 * 60))
         return c.json({ error: "rate_limited" }, 429)
       }
@@ -255,6 +318,11 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
       // the resolved bucket, never clears it on success).
       const rateLimitKey = c.get("loginRateLimitKey") as string | undefined
       if (rateLimitKey) loginRateLimiter.recordFailure(rateLimitKey)
+      c.get("requestLogger").warn("auth.login.failed", {
+        profileId,
+        mechanism: bearer !== undefined ? "bearer" : "json_body",
+        reason: viewKey ? "invalid_view_key" : "missing_view_key",
+      })
       return c.json({ error: "unauthorized" }, 401)
     }
 
@@ -263,6 +331,11 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
     if (rateLimitKey) loginRateLimiter.reset(rateLimitKey)
     const cookie = createSessionCookie(profile.id, viewKey, deps!.sessionSecret, nowMs(), SESSION_MAX_AGE_SECONDS, secure)
     c.header("set-cookie", cookie)
+    c.get("requestLogger").info("auth.login.succeeded", {
+      profileId,
+      mechanism: bearer !== undefined ? "bearer" : "json_body",
+      secureCookie: secure,
+    })
     return c.json({ ok: true }, 200)
     },
   )
@@ -277,24 +350,44 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: { loginRateLimitKey
     if (!parsed.ok) return c.json({ error: "invalid range" }, 400)
 
     const payload = refreshService.getPayload(profileId, parsed.range)
+    c.get("requestLogger").debug("dashboard.payload.served", {
+      profileId,
+      range: parsed.range,
+      subscriptionCount: payload.subscriptions.length,
+    })
     return c.json(payload, 200)
   })
 
   // --- POST /api/dashboard/:profileId/refresh ---
   app.post("/api/dashboard/:profileId/refresh", async (c) => {
     const profileId = c.req.param("profileId")
+    const requestLogger = c.get("requestLogger")
 
     const origin = c.req.header("origin")
-    if (!originAllowed(origin, c, secure, publicOrigin, !secure)) return c.json({ error: "forbidden" }, 403)
+    if (!originAllowed(origin, c, secure, publicOrigin, !secure)) {
+      requestLogger.warn("refresh.http.denied", { profileId, reason: "origin_rejected", origin })
+      return c.json({ error: "forbidden" }, 403)
+    }
 
     const authFail = authenticate(c, profileId)
     if (authFail !== null) return authFail
 
     const parsed = resolveRangeParam(new URL(c.req.url))
-    if (!parsed.ok) return c.json({ error: "invalid range" }, 400)
+    if (!parsed.ok) {
+      requestLogger.warn("refresh.http.denied", { profileId, reason: "invalid_range" })
+      return c.json({ error: "invalid range" }, 400)
+    }
 
     const ip = clientIp(c)
-    const outcome = await refreshService.refreshProfile({ profileId, ip, range: parsed.range })
+    requestLogger.info("refresh.http.requested", { profileId, range: parsed.range, ip })
+    const outcome = await refreshService.refreshProfile({ profileId, ip, range: parsed.range, requestId: c.get("requestId") })
+    requestLogger.info("refresh.http.outcome", {
+      profileId,
+      range: parsed.range,
+      status: outcome.status,
+      ...(outcome.status === "degraded" || outcome.status === "fatal" ? { error: outcome.error } : {}),
+      ...(outcome.status === "rate_limited" ? { providerAccountId: outcome.providerAccountId } : {}),
+    })
 
     switch (outcome.status) {
       case "ok":

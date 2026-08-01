@@ -7,6 +7,7 @@ import type {
   ProviderRuntimeState,
   SourceValueKind,
 } from "../../shared/domain"
+import type { Logger } from "../logging/logger"
 
 export type ProviderRefreshInput = {
   providerAccountId: string
@@ -14,6 +15,7 @@ export type ProviderRefreshInput = {
   runtime: ProviderRuntimeState
   now: string
   metrics: MetricConfig[]
+  logger?: Logger
   importState?: { maxCreationTime?: number; importedQueryIdsAtMaxCreationTime: string[] }
 }
 

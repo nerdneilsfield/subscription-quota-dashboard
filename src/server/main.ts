@@ -22,6 +22,8 @@ import { createCliproxyProvider } from "./providers/cliproxy"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 import { parseTrustedProxies } from "./http/client-ip"
+import { createLogger, parseLogFormat, parseLogLevel } from "./logging/logger"
+import { createLoggedFetch } from "./logging/fetch"
 
 const port = Number(process.env.PORT ?? 3000)
 // Default to loopback only. Set HOST=0.0.0.0 (or a specific interface) to
@@ -30,6 +32,11 @@ const hostname = process.env.HOST ?? "127.0.0.1"
 const configPath = process.env.CONFIG_PATH ?? "config/dashboard.config.ts"
 const dbPath = process.env.DASHBOARD_DB ?? "data/dashboard.db"
 const nodeEnv = process.env.NODE_ENV === "production" ? "production" : "development"
+const logger = createLogger({
+  level: parseLogLevel(process.env.LOG_LEVEL, nodeEnv === "production" ? "info" : "debug"),
+  format: parseLogFormat(process.env.LOG_FORMAT, nodeEnv === "production" ? "json" : "pretty"),
+  base: { environment: nodeEnv },
+})
 const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES)
 // The public-facing origin for same-origin Origin checks. Set this when
 // behind an HTTPS-terminating reverse proxy, e.g. https://dashboard.example.com.
@@ -42,50 +49,67 @@ const publicOrigin = (() => {
     const parsed = new URL(raw)
     // Reject non-HTTP schemes and opaque origins
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      console.error(`PUBLIC_ORIGIN must be http: or https: URL, got: ${parsed.protocol}`)
+      logger.error("config.public_origin.invalid", { protocol: parsed.protocol, reason: "unsupported_protocol" })
       process.exit(1)
     }
     const origin = parsed.origin
     if (origin === "null") {
-      console.error(`PUBLIC_ORIGIN resolved to opaque origin: ${raw}`)
+      logger.error("config.public_origin.invalid", { publicOrigin: raw, reason: "opaque_origin" })
       process.exit(1)
     }
     // Reject credentials in the origin
     if (parsed.username || parsed.password) {
-      console.error(`PUBLIC_ORIGIN must not contain credentials: ${raw}`)
+      logger.error("config.public_origin.invalid", { reason: "contains_credentials" })
       process.exit(1)
     }
     return origin
   } catch {
-    console.error(`PUBLIC_ORIGIN is not a valid URL: ${raw}`)
+    logger.error("config.public_origin.invalid", { publicOrigin: raw, reason: "invalid_url" })
     process.exit(1)
   }
 })()
 
 async function main(): Promise<void> {
+  logger.info("server.starting", { hostname, port, configPath, dbPath })
   const config = await loadDashboardConfigFromFile(resolve(configPath))
+  logger.info("config.loaded", {
+    providerAccountCount: config.providers.size,
+    subscriptionCount: config.subscriptions.size,
+    profileCount: config.profiles.size,
+    providerAccounts: [...config.providers.values()].map((provider) => ({
+      id: provider.id,
+      type: provider.type,
+      runtimeAvailable: config.providerRuntime.get(provider.id)?.available ?? false,
+    })),
+  })
 
   mkdirSync(dirname(resolve(dbPath)), { recursive: true })
   const db = openDashboardDatabase(resolve(dbPath))
   const storage = createRepositories(db)
+  logger.info("storage.opened", { dbPath: resolve(dbPath), healthy: storage.healthCheck() })
 
+  const loggedFetch = createLoggedFetch(logger.child({ component: "upstream" }))
   const providers = new Map<string, ProviderAdapter>([
     ["manual", createManualProvider()],
-    ["poe", createPoeProvider()],
-    ["deepseek", createDeepseekProvider()],
-    ["stepfun", createStepfunProvider()],
-    ["siliconflow", createSiliconflowProvider()],
-    ["openrouter", createOpenrouterProvider()],
-    ["novita", createNovitaProvider()],
-    ["kimi", createKimiProvider()],
-    ["zhipu", createZhipuProvider()],
-    ["minimax", createMiniMaxProvider()],
-    ["zenmux", createZenmuxProvider()],
-    ["volcengine", createVolcengineProvider()],
-    ["cliproxy", createCliproxyProvider()],
+    ["poe", createPoeProvider(loggedFetch)],
+    ["deepseek", createDeepseekProvider(loggedFetch)],
+    ["stepfun", createStepfunProvider(loggedFetch)],
+    ["siliconflow", createSiliconflowProvider(loggedFetch)],
+    ["openrouter", createOpenrouterProvider(loggedFetch)],
+    ["novita", createNovitaProvider(loggedFetch)],
+    ["kimi", createKimiProvider(loggedFetch)],
+    ["zhipu", createZhipuProvider(loggedFetch)],
+    ["minimax", createMiniMaxProvider(loggedFetch)],
+    ["zenmux", createZenmuxProvider(loggedFetch)],
+    ["volcengine", createVolcengineProvider(loggedFetch)],
+    ["cliproxy", createCliproxyProvider(loggedFetch)],
   ])
 
-  const { secret: sessionSecret } = resolveSessionSecret(process.env as Record<string, string | undefined>)
+  const { secret: sessionSecret, generated: generatedSessionSecret } = resolveSessionSecret(
+    process.env as Record<string, string | undefined>,
+    (message) => logger.warn("auth.session_secret.generated", {}, message),
+  )
+  logger.debug("auth.session_secret.resolved", { generated: generatedSessionSecret })
 
   // Serve the built SPA whenever the compiled client is present. This is
   // decoupled from NODE_ENV because the Bun bundler bakes process.env.NODE_ENV
@@ -101,16 +125,21 @@ async function main(): Promise<void> {
     sessionSecret,
     environment: nodeEnv,
     trustedProxies,
+    logger,
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
     ...(staticDir !== undefined ? { staticDir } : {}),
   }
 
   const app = createApp(deps)
   serve({ fetch: app.fetch, port, hostname })
-  console.log(`subscription-quota-dashboard listening on http://${hostname}:${port}`)
+  logger.info("server.started", {
+    url: `http://${hostname}:${port}`,
+    staticClientEnabled: staticDir !== undefined,
+    logLevel: logger.level,
+  })
 }
 
 main().catch((err) => {
-  console.error("Failed to start:", err)
+  logger.error("server.start_failed", { error: err })
   process.exit(1)
 })

@@ -11,6 +11,7 @@ import type {
   MetricThresholds,
   RangeKey,
   SourceValueKind,
+  SubscriptionIdentity,
 } from "./domain"
 
 export type DashboardUsageFilter = {
@@ -76,6 +77,7 @@ export type DashboardSubscriptionError = { message: string; stale: boolean }
 export type DashboardSubscription = {
   id: string
   name: string
+  identity?: SubscriptionIdentity
   ui?: { color?: string; group?: string; sort?: number }
   status: MetricStatus
   lastRefreshAt?: string

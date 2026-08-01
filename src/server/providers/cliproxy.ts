@@ -3,6 +3,7 @@ import type {
   NormalizedMetric, ProviderAdapter, ProviderRefreshInput, ProviderRefreshResult,
 } from "./types"
 import { authError, isRetryableStatus, parseNumber } from "./shared"
+import { silentLogger, type Logger } from "../logging/logger"
 
 // CLIProxyAPI adapter.
 // GET /v0/management/auth-files -> discover accounts
@@ -45,6 +46,8 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
   return {
     type: "cliproxy",
     async refresh(input: ProviderRefreshInput): Promise<ProviderRefreshResult> {
+      const logger = (input.logger ?? silentLogger).child({ component: "provider.cliproxy" })
+      const refreshStartedAt = performance.now()
       const base: ProviderRefreshResult = {
         providerAccountId: input.providerAccountId,
         fetchedAt: input.now,
@@ -54,6 +57,7 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
 
       const apiKey = input.runtime.apiKey
       if (!apiKey) {
+        logger.error("cliproxy.configuration.invalid", { reason: "management_key_missing" })
         return { ...base, errors: [{ message: "CLIProxyAPI provider unavailable: management key not configured", retryable: false }] }
       }
 
@@ -63,6 +67,13 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       const deadline = Date.now() + OVERALL_DEADLINE_MS
       const deadlineController = new AbortController()
       const deadlineTimer = setTimeout(() => deadlineController.abort(), OVERALL_DEADLINE_MS)
+      logger.info("cliproxy.refresh.started", {
+        baseUrl,
+        queryProviders,
+        apiCallConcurrency: API_CALL_CONCURRENCY,
+        perCallTimeoutMs: PER_CALL_TIMEOUT_MS,
+        overallDeadlineMs: OVERALL_DEADLINE_MS,
+      })
 
       // 1) Discover accounts
       let authFiles: AuthFileEntry[]
@@ -71,25 +82,35 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       mgmtHeaders.set("Accept", "application/json")
 
       try {
+        const discoveryStartedAt = performance.now()
+        logger.debug("cliproxy.discovery.requested", { endpoint: "/v0/management/auth-files" })
         const res = await fetchImpl(`${baseUrl}/v0/management/auth-files`, {
           method: "GET", headers: mgmtHeaders, signal: deadlineController.signal,
         })
+        logger.debug("cliproxy.discovery.responded", {
+          status: res.status,
+          durationMs: Math.round((performance.now() - discoveryStartedAt) * 100) / 100,
+        })
         if (res.status === 404) {
           clearTimeout(deadlineTimer)
+          logger.error("cliproxy.discovery.failed", { status: res.status, reason: "management_api_not_enabled" })
           return { ...base, errors: [{ message: "CLIProxyAPI management API not enabled. Set MANAGEMENT_PASSWORD or remote-management.secret-key.", retryable: false }] }
         }
         if (res.status === 401 || res.status === 403) {
           clearTimeout(deadlineTimer)
+          logger.error("cliproxy.discovery.failed", { status: res.status, reason: "management_authentication_failed" })
           return { ...base, errors: [authError("CLIProxyAPI authentication failed")] }
         }
         if (!res.ok) {
           clearTimeout(deadlineTimer)
+          logger.error("cliproxy.discovery.failed", { status: res.status, reason: "unexpected_status" })
           return { ...base, errors: [{ message: `CLIProxyAPI auth-files request failed (${res.status})`, retryable: isRetryableStatus(res.status) }] }
         }
         const body = (await res.json()) as { files?: AuthFileEntry[] }
         authFiles = Array.isArray(body.files) ? body.files : []
-      } catch {
+      } catch (error) {
         clearTimeout(deadlineTimer)
+        logger.error("cliproxy.discovery.failed", { reason: "network_error", error })
         return { ...base, errors: [{ message: "CLIProxyAPI auth-files network error", retryable: true }] }
       }
 
@@ -108,6 +129,13 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
           ...(a.id_token !== undefined ? { idToken: a.id_token } : {}),
         }]
       })
+      logger.info("cliproxy.discovery.completed", {
+        discoveredCount: authFiles.length,
+        selectedCount: accounts.length,
+        skippedCount: authFiles.length - accounts.length,
+        selectedByProvider: Object.fromEntries(queryProviders.map((provider) => [provider, accounts.filter((account) => account.provider === provider).length])),
+        accounts: accounts.map((account) => ({ provider: account.provider, authIndex: account.authIndex, label: account.label })),
+      })
 
       // 2) Fan out api-call per account (concurrency-capped, with deadline + fast-fail)
       const metrics: NormalizedMetric[] = []
@@ -125,6 +153,7 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
           // stay visible (not silently dropped). Mark as aborted so we don't
           // return dynamicSubscriptions (coalesce will preserve last-good).
           aborted = true
+          logger.error("cliproxy.deadline.exceeded", { processedCount: i, remainingCount: accounts.length - i })
           for (const acct of accounts.slice(i)) {
             const errorMetric = makeErrorMetric(acct.provider, acct.authIndex, "refresh deadline exceeded")
             metrics.push(errorMetric)
@@ -135,8 +164,9 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
         }
 
         const batch = accounts.slice(i, i + API_CALL_CONCURRENCY)
+        logger.debug("cliproxy.batch.started", { offset: i, batchSize: batch.length, remainingCount: accounts.length - i })
         const results = await Promise.allSettled(
-          batch.map((acct) => queryAccountWithTimeout(fetchImpl, baseUrl, apiKey, acct, deadlineController.signal)),
+          batch.map((acct) => queryAccountWithTimeout(fetchImpl, baseUrl, apiKey, acct, deadlineController.signal, logger)),
         )
 
         // Process batch results FIRST (before any fast-fail decision)
@@ -155,6 +185,23 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
             // Use structured retryable from apiCall (not string guessing)
             const isRetryable = r.retryable ?? !isAuthErrorKind(r.errorKind)
             adapterErrors.push({ message: `${acct.provider}:${acct.authIndex}: ${r.error}`, retryable: isRetryable })
+            logger.warn("cliproxy.account.failed", {
+              provider: acct.provider,
+              authIndex: acct.authIndex,
+              label: acct.label,
+              error: r.error,
+              errorKind: r.errorKind,
+              retryable: isRetryable,
+              metricCount: r.metrics.length,
+            })
+          } else {
+            logger.info("cliproxy.account.completed", {
+              provider: acct.provider,
+              authIndex: acct.authIndex,
+              label: acct.label,
+              metricCount: r.metrics.length,
+              metricIds: r.metrics.map((metric) => metric.providerMetricId),
+            })
           }
           metrics.push(...accountMetrics)
           dynamicSubscriptions.push(makeDynSub(acct, accountMetrics.map(m => m.providerMetricId)))
@@ -182,6 +229,7 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
         const allMgmtAuthFailed = batchResults.every(r => r.errorKind === "mgmt-auth")
         if (allMgmtAuthFailed && i + API_CALL_CONCURRENCY < accounts.length) {
           aborted = true
+          logger.error("cliproxy.batch.aborted", { reason: "management_authentication_failed", offset: i, remainingCount: accounts.length - i - batch.length })
           adapterErrors.push({ message: "All api-call requests in batch failed management authentication; aborting remaining", retryable: false })
           // Process remaining accounts as error metrics so they stay visible
           for (const acct of accounts.slice(i + API_CALL_CONCURRENCY)) {
@@ -202,6 +250,13 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       // The error metrics + subscriptions are still in metrics[] for this refresh
       // cycle (visible immediately), but storage won't overwrite the good list.
       if (aborted) {
+        logger.warn("cliproxy.refresh.completed", {
+          status: "aborted",
+          durationMs: Math.round((performance.now() - refreshStartedAt) * 100) / 100,
+          metricCount: metrics.length,
+          errorCount: adapterErrors.length,
+          errors: adapterErrors,
+        })
         return { ...base, metrics, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}) }
       }
 
@@ -209,6 +264,18 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
       // refresh service to preserve old metrics with matching prefixes from
       // the previous cache (per-endpoint granularity, not per-subscription).
       const preserveMetricIds = failedMetricPrefixes.length > 0 ? failedMetricPrefixes : undefined
+      const completionFields = {
+        status: adapterErrors.length > 0 ? "degraded" : "ok",
+        durationMs: Math.round((performance.now() - refreshStartedAt) * 100) / 100,
+        discoveredAccountCount: authFiles.length,
+        queriedAccountCount: accounts.length,
+        metricCount: metrics.length,
+        dynamicSubscriptionCount: dynamicSubscriptions.length,
+        errorCount: adapterErrors.length,
+        errors: adapterErrors,
+      }
+      if (adapterErrors.length > 0) logger.warn("cliproxy.refresh.completed", completionFields)
+      else logger.info("cliproxy.refresh.completed", completionFields)
       return { ...base, metrics, dynamicSubscriptions, ...(adapterErrors.length > 0 ? { errors: adapterErrors } : {}),
         ...(preserveMetricIds !== undefined ? { preserveMetricIds } : {}) }
     },
@@ -216,12 +283,40 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
 }
 
 function makeDynSub(acct: FilteredAccount, providerMetricIds: string[]): DynamicSubscription {
+  const providerLabel = UPSTREAM_LABELS[acct.provider] ?? titleCase(acct.provider)
   return {
     id: `cliproxy:${acct.provider}:${acct.authIndex}`,
-    name: acct.label ? `CLIProxy - ${acct.label}` : `CLIProxy - ${acct.provider} #${acct.authIndex.slice(0, 8)}`,
+    name: providerLabel,
     providerMetricIds,
-    ui: { group: "CLIProxy" },
+    identity: {
+      provider: acct.provider,
+      providerLabel,
+      ...(acct.label ? { account: acct.label } : {}),
+      ...(acct.provider === "xai"
+        ? { plan: "SuperGrok" }
+        : acct.idToken?.plan_type ? { plan: formatPlan(acct.idToken.plan_type) } : {}),
+      transport: "CLIProxy",
+    },
+    ui: { group: providerLabel },
   }
+}
+
+const UPSTREAM_LABELS: Record<string, string> = {
+  codex: "Codex",
+  claude: "Claude",
+  xai: "Grok",
+}
+
+function titleCase(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function formatPlan(value: string): string {
+  const normalized = value.toLowerCase().replace(/[_-]+/g, "")
+  if (normalized === "prolite") return "Pro Lite"
+  return titleCase(value)
 }
 
 function isAuthErrorKind(kind: ErrorKind | undefined): boolean {
@@ -230,13 +325,28 @@ function isAuthErrorKind(kind: ErrorKind | undefined): boolean {
 
 async function queryAccountWithTimeout(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, acct: FilteredAccount, parentSignal: AbortSignal,
+  logger: Logger,
 ): Promise<AccountQueryResult> {
+  const accountLogger = logger.child({ provider: acct.provider, authIndex: acct.authIndex, label: acct.label })
+  const startedAt = performance.now()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), PER_CALL_TIMEOUT_MS)
   parentSignal.addEventListener("abort", () => controller.abort(), { once: true })
   try {
-    return await queryAccount(fetchImpl, baseUrl, mgmtKey, acct, controller.signal)
-  } catch {
+    accountLogger.debug("cliproxy.account.started", {})
+    const result = await queryAccount(fetchImpl, baseUrl, mgmtKey, acct, controller.signal, accountLogger)
+    accountLogger.debug("cliproxy.account.finished", {
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      metricCount: result.metrics.length,
+      error: result.error,
+      errorKind: result.errorKind,
+    })
+    return result
+  } catch (error) {
+    accountLogger.error("cliproxy.account.exception", {
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      error,
+    })
     return { metrics: [], error: "request timeout or abort", errorKind: "transport", retryable: true }
   } finally {
     clearTimeout(timer)
@@ -245,13 +355,14 @@ async function queryAccountWithTimeout(
 
 async function queryAccount(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, acct: FilteredAccount, signal: AbortSignal,
+  logger: Logger,
 ): Promise<AccountQueryResult> {
   if (acct.provider === "codex") {
-    return queryCodex(fetchImpl, baseUrl, mgmtKey, acct.authIndex, acct.idToken?.chatgpt_account_id, signal)
+    return queryCodex(fetchImpl, baseUrl, mgmtKey, acct.authIndex, acct.idToken?.chatgpt_account_id, signal, logger)
   } else if (acct.provider === "claude") {
-    return queryClaude(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal)
+    return queryClaude(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal, logger)
   } else if (acct.provider === "xai") {
-    return queryXai(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal)
+    return queryXai(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal, logger)
   }
   return { metrics: [], error: `unknown provider: ${acct.provider}`, errorKind: "unknown", retryable: false }
 }
@@ -263,8 +374,11 @@ type ApiCallResult =
 async function apiCall(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string,
   authIndex: string, method: string, url: string, headers: Record<string, string>,
-  signal: AbortSignal,
+  signal: AbortSignal, logger: Logger,
 ): Promise<ApiCallResult> {
+  const target = new URL(url)
+  const startedAt = performance.now()
+  logger.debug("cliproxy.api_call.requested", { method, targetOrigin: target.origin, targetPath: target.pathname })
   let res: Response
   try {
     res = await fetchImpl(`${baseUrl}/v0/management/api-call`, {
@@ -273,9 +387,24 @@ async function apiCall(
       body: JSON.stringify({ auth_index: authIndex, method, url, header: headers }),
       signal,
     })
-  } catch {
+  } catch (error) {
+    logger.warn("cliproxy.api_call.failed", {
+      method,
+      targetOrigin: target.origin,
+      targetPath: target.pathname,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      reason: "network_error",
+      error,
+    })
     return { ok: false, error: "network error", errorKind: "transport", retryable: true }
   }
+  logger.debug("cliproxy.api_call.responded", {
+    method,
+    targetOrigin: target.origin,
+    targetPath: target.pathname,
+    managementStatus: res.status,
+    durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+  })
   // Management API HTTP status determines error type
   if (res.status === 502) {
     return { ok: false, error: "api-call transport failure", errorKind: "transport", retryable: true }
@@ -306,6 +435,7 @@ async function apiCall(
 
 async function queryCodex(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string, accountId: string | undefined, signal: AbortSignal,
+  logger: Logger,
 ): Promise<AccountQueryResult> {
   const headers: Record<string, string> = {
     "Authorization": "Bearer $TOKEN$",
@@ -315,7 +445,7 @@ async function queryCodex(
   if (accountId !== undefined) headers["ChatGPT-Account-Id"] = accountId
 
   const result = await apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
-    "https://chatgpt.com/backend-api/wham/usage", headers, signal)
+    "https://chatgpt.com/backend-api/wham/usage", headers, signal, logger)
   if (!result.ok) return { metrics: [], error: result.error, errorKind: result.errorKind, retryable: result.retryable }
 
   const upstreamErr = classifyUpstreamStatus(result.statusCode)
@@ -381,6 +511,7 @@ async function queryCodex(
 
 async function queryClaude(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string, signal: AbortSignal,
+  logger: Logger,
 ): Promise<AccountQueryResult> {
   const headers: Record<string, string> = {
     "Authorization": "Bearer $TOKEN$",
@@ -389,7 +520,7 @@ async function queryClaude(
   }
 
   const result = await apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
-    "https://api.anthropic.com/api/oauth/usage", headers, signal)
+    "https://api.anthropic.com/api/oauth/usage", headers, signal, logger)
   if (!result.ok) return { metrics: [], error: result.error, errorKind: result.errorKind, retryable: result.retryable }
 
   const upstreamErr = classifyUpstreamStatus(result.statusCode)
@@ -429,6 +560,7 @@ async function queryClaude(
 
 async function queryXai(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, authIndex: string, signal: AbortSignal,
+  logger: Logger,
 ): Promise<AccountQueryResult> {
   const headers: Record<string, string> = {
     "Authorization": "Bearer $TOKEN$",
@@ -440,9 +572,9 @@ async function queryXai(
 
   const [weeklyResult, monthlyResult] = await Promise.all([
     apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
-      "https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers, signal),
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers, signal, logger),
     apiCall(fetchImpl, baseUrl, mgmtKey, authIndex, "GET",
-      "https://cli-chat-proxy.grok.com/v1/billing", headers, signal),
+      "https://cli-chat-proxy.grok.com/v1/billing", headers, signal, logger),
   ])
 
   // Check for upstream auth errors (I2 fix: xai now classifies 401/403)
@@ -570,18 +702,22 @@ async function queryXai(
     return { metrics: [], error: err, errorKind: kind, retryable }
   }
 
-  const weeklyUsed = parseNumber(config["credit_usage_percent"])
-  if (weeklyUsed !== undefined) {
-    const period = config["current_period"] as Record<string, unknown> | undefined
-    const periodEnd = typeof period?.["end"] === "string" ? period["end"] as string : undefined
+  const weeklyUsedReported = parseNumber(config["credit_usage_percent"] ?? config["creditUsagePercent"])
+  const period = readXaiRecord(weeklyConfig ?? config, "current_period", "currentPeriod")
+  const periodEnd = readXaiString(period, "end")
+  // New unified-billing responses omit creditUsagePercent when no weekly
+  // credits have been consumed, but still return the authoritative weekly
+  // currentPeriod. Surface that window instead of silently dropping it.
+  if (weeklyUsedReported !== undefined || periodEnd !== undefined) {
+    const weeklyUsed = weeklyUsedReported ?? 0
     metrics.push({
       providerMetricId: `xai:${authIndex}:weekly`,
-      label: "Weekly",
+      label: "Weekly quota",
       unit: "%",
       used: weeklyUsed,
       limit: 100,
       sourceValueKind: "gauge-used",
-      sourceConfidence: "known",
+      sourceConfidence: weeklyUsedReported !== undefined ? "known" : "estimated",
       ...(periodEnd !== undefined ? { window: { kind: "rolling" as const, duration: "7d", resetAt: periodEnd } } : {}),
     })
   }
@@ -595,32 +731,33 @@ async function queryXai(
   if (onDemandUsed === undefined && used !== undefined && monthlyLimit !== undefined && used > monthlyLimit) {
     onDemandUsed = used - monthlyLimit
   }
-  const billingPeriodEnd = typeof monthlyCfg["billing_period_end"] === "string" ? monthlyCfg["billing_period_end"] as string : undefined
+  const billingPeriodEnd = readXaiString(monthlyCfg, "billing_period_end", "billingPeriodEnd")
 
   if (monthlyLimit !== undefined && monthlyLimit > 0 && used !== undefined) {
-    const monthlyUsedPercent = (used / monthlyLimit) * 100
     metrics.push({
       providerMetricId: `xai:${authIndex}:monthly`,
-      label: "Monthly",
-      unit: "%",
-      used: monthlyUsedPercent,
-      limit: 100,
+      label: "Monthly credits",
+      unit: "$",
+      used: used / 100,
+      limit: monthlyLimit / 100,
       sourceValueKind: "gauge-used",
       sourceConfidence: "known",
       ...(billingPeriodEnd !== undefined ? { window: { kind: "rolling" as const, duration: "30d", resetAt: billingPeriodEnd } } : {}),
     })
   }
 
-  if (onDemandCap !== undefined && onDemandCap > 0 && onDemandUsed !== undefined) {
-    const onDemandPercent = (onDemandUsed / onDemandCap) * 100
+  if (onDemandCap !== undefined) {
+    const enabled = onDemandCap > 0
     metrics.push({
       providerMetricId: `xai:${authIndex}:on_demand`,
-      label: "On-demand",
-      unit: "%",
-      used: onDemandPercent,
-      limit: 100,
-      sourceValueKind: "gauge-used",
+      label: "Pay as you go",
+      unit: "status",
+      sourceValueKind: "status",
       sourceConfidence: "known",
+      suggestedDisplayModule: "manual-status-card",
+      notes: enabled
+        ? `Enabled · $${(onDemandCap / 100).toFixed(2)} cap · $${((onDemandUsed ?? 0) / 100).toFixed(2)} used`
+        : "Disabled",
     })
   }
 
@@ -684,6 +821,23 @@ function readXaiCents(obj: Record<string, unknown>, ...keys: string[]): number |
         if (Number.isFinite(n)) return n
       }
     }
+  }
+  return undefined
+}
+
+function readXaiRecord(obj: Record<string, unknown>, ...keys: string[]): Record<string, unknown> | undefined {
+  for (const key of keys) {
+    const value = obj[key]
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) return value as Record<string, unknown>
+  }
+  return undefined
+}
+
+function readXaiString(obj: Record<string, unknown> | undefined, ...keys: string[]): string | undefined {
+  if (!obj) return undefined
+  for (const key of keys) {
+    const value = obj[key]
+    if (typeof value === "string" && value !== "") return value
   }
   return undefined
 }

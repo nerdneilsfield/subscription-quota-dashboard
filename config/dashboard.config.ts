@@ -24,9 +24,9 @@ const config: DashboardConfigInput = {
     // { id: "zenmux-main", type: "zenmux", baseUrl: "https://your-zenmux.example.com", apiKeyEnv: "ZENMUX_API_KEY" },
     // { id: "volc-main", type: "volcengine", region: "cn-beijing", akEnv: "VOLCENGINE_AK", skEnv: "VOLCENGINE_SK" },
     // --- Dynamic provider (auto-discovers codex/claude/xai accounts) ---
-    // { id: "cliproxy-main", type: "cliproxy",
-    //   baseUrl: process.env.CLIPROXY_BASE_URL ?? "http://localhost:8317",
-    //   apiKeyEnv: "CLIPROXY_MGMT_KEY" },
+    { id: "cliproxy-main", type: "cliproxy",
+      baseUrl: process.env.CLIPROXY_BASE_URL ?? "http://localhost:8317",
+      apiKeyEnv: "CLIPROXY_MGMT_KEY" },
   ],
   subscriptions: [
     {
@@ -93,7 +93,7 @@ const config: DashboardConfigInput = {
       name: "Personal",
       viewKey: process.env.SELF_DASHBOARD_VIEW_KEY,
       subscriptionIds: ["poe-api", "cursor"],
-      // dynamicProviderIds: ["cliproxy-main"],
+      dynamicProviderIds: ["cliproxy-main"],
     },
   ],
 }

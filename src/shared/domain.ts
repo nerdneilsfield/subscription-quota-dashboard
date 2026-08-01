@@ -76,6 +76,14 @@ export type DynamicSubscription = {
   id: string
   name: string
   providerMetricIds: string[]
+  identity?: SubscriptionIdentity
   ui?: { color?: string; group?: string; sort?: number }
+}
+export type SubscriptionIdentity = {
+  provider: string
+  providerLabel: string
+  account?: string
+  plan?: string
+  transport?: string
 }
 export type NormalizedConfig = { providers: Map<string, ProviderAccountConfig>; providerRuntime: Map<string, ProviderRuntimeState>; subscriptions: Map<string, SubscriptionConfig>; profiles: Map<string, ProfileConfig> }

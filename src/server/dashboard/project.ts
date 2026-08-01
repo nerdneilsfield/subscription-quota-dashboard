@@ -13,6 +13,7 @@ import type {
   NormalizedConfig,
   RangeKey,
   SourceValueKind,
+  SubscriptionIdentity,
 } from "../../shared/domain"
 import type {
   DashboardMetric,
@@ -80,6 +81,7 @@ export type ProviderAccountProjection = {
 export type ProjectedMetric = {
   subscriptionId: string
   subscriptionName: string
+  subscriptionIdentity?: SubscriptionIdentity
   subscriptionUi?: { color?: string; group?: string; sort?: number }
   metricId: string
   metricKey: string
@@ -229,6 +231,7 @@ export function projectProviderMetrics(input: ProjectProviderMetricsInput): Proj
         result.push({
           subscriptionId: dynSub.id,
           subscriptionName: dynSub.name,
+          ...(dynSub.identity ? { subscriptionIdentity: dynSub.identity } : {}),
           ...(dynSub.ui ? { subscriptionUi: dynSub.ui } : {}),
           metricId: providerMetricId,
           metricKey,
@@ -267,6 +270,9 @@ function synthesizeMetricConfig(m: NormalizedMetric, providerMetricId: string): 
 function inferDisplayModule(m: NormalizedMetric): DisplayModule {
   if (m.suggestedDisplayModule !== undefined) return m.suggestedDisplayModule
   if (m.sourceValueKind === "status") return "manual-status-card"
+  if ((m.sourceValueKind === "gauge-used" || m.sourceValueKind === "gauge-remaining") && m.limit !== undefined) {
+    return "period-quota-card"
+  }
   if (m.window?.kind === "rolling") return "rolling-window-card"
   if (m.window?.kind === "calendar" || m.window?.kind === "fixed") return "period-quota-card"
   return "balance-card"
@@ -347,6 +353,7 @@ function buildSubscriptions(
       status: subscriptionStatus,
       metrics: dashboardMetrics,
     }
+    if (first.subscriptionIdentity) sub.identity = first.subscriptionIdentity
     if (first.subscriptionUi) sub.ui = first.subscriptionUi
     if (first.cache) sub.lastRefreshAt = first.cache.fetchedAt
     const errors = collectSubscriptionErrors(first.cache)

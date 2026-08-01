@@ -6,6 +6,7 @@ import type {
   ProviderRefreshInput,
   ProviderRefreshResult,
 } from "./types"
+import { silentLogger, type Logger } from "../logging/logger"
 
 // Poe provider adapter.
 //
@@ -34,6 +35,9 @@ import type {
 const POE_BASE = "https://api.poe.com/usage"
 const POINTS_METRIC_ID = "points"
 const PAGE_LIMIT = 100
+const REQUEST_TIMEOUT_MS = 15_000
+const MAX_REQUEST_ATTEMPTS = 3
+const RETRY_DELAYS_MS = [50, 150]
 
 type PoeRow = {
   query_id: string
@@ -51,6 +55,7 @@ export function createPoeProvider(fetchImpl: typeof fetch = fetch): ProviderAdap
   return {
     type: "poe",
     async refresh(input: ProviderRefreshInput): Promise<ProviderRefreshResult> {
+      const logger = (input.logger ?? silentLogger).child({ component: "provider.poe" })
       const base: ProviderRefreshResult = {
         providerAccountId: input.providerAccountId,
         fetchedAt: input.now,
@@ -74,7 +79,7 @@ export function createPoeProvider(fetchImpl: typeof fetch = fetch): ProviderAdap
       // --- balance ---
       let balanceMetric: NormalizedMetric | undefined
       try {
-        const balRes = await fetchImpl(`${POE_BASE}/current_balance`, { method: "GET", headers })
+        const balRes = await requestPoe(fetchImpl, `${POE_BASE}/current_balance`, headers, "balance", logger)
         if (balRes.status === 401) {
           return { ...base, errors: [{ message: "Poe authentication failed", retryable: false }] }
         }
@@ -91,8 +96,9 @@ export function createPoeProvider(fetchImpl: typeof fetch = fetch): ProviderAdap
         }
         const balBody = (await balRes.json()) as { current_point_balance?: number }
         balanceMetric = mapBalance(balBody, input.metrics)
-      } catch {
-        return { ...base, errors: [{ message: "Poe balance request network error", retryable: true }] }
+      } catch (error) {
+        logger.error("poe.balance.failed", { error, attempts: MAX_REQUEST_ATTEMPTS })
+        return { ...base, errors: [{ message: `Poe balance request network error after ${MAX_REQUEST_ATTEMPTS} attempts`, retryable: true }] }
       }
 
       // --- history (paginated) ---
@@ -109,7 +115,7 @@ export function createPoeProvider(fetchImpl: typeof fetch = fetch): ProviderAdap
 
         let page: { data?: PoeRow[]; has_more?: boolean }
         try {
-          const res = await fetchImpl(url.toString(), { method: "GET", headers })
+          const res = await requestPoe(fetchImpl, url.toString(), headers, "history", logger)
           if (res.status === 401) {
             return {
               ...base,
@@ -130,11 +136,12 @@ export function createPoeProvider(fetchImpl: typeof fetch = fetch): ProviderAdap
             }
           }
           page = (await res.json()) as { data?: PoeRow[]; has_more?: boolean }
-        } catch {
+        } catch (error) {
+          logger.error("poe.history.failed", { error, attempts: MAX_REQUEST_ATTEMPTS, cursorPresent: cursor !== undefined })
           return {
             ...base,
             metrics: balanceMetric ? [balanceMetric] : [],
-            errors: [{ message: "Poe history request network error", retryable: true }],
+            errors: [{ message: `Poe history request network error after ${MAX_REQUEST_ATTEMPTS} attempts`, retryable: true }],
           }
         }
 
@@ -165,6 +172,55 @@ export function createPoeProvider(fetchImpl: typeof fetch = fetch): ProviderAdap
       }
     },
   }
+}
+
+async function requestPoe(
+  fetchImpl: typeof fetch,
+  url: string,
+  headers: Headers,
+  endpoint: "balance" | "history",
+  logger: Logger,
+): Promise<Response> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt++) {
+    const startedAt = performance.now()
+    try {
+      const response = await fetchImpl(url, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
+      const retryableStatus = response.status === 429 || response.status >= 500
+      if (!retryableStatus || attempt === MAX_REQUEST_ATTEMPTS) return response
+      const delayMs = RETRY_DELAYS_MS[attempt - 1] ?? 0
+      logger.warn("poe.request.retrying", {
+        endpoint,
+        attempt,
+        status: response.status,
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+        delayMs,
+      })
+      await sleep(delayMs)
+    } catch (error) {
+      lastError = error
+      if (attempt === MAX_REQUEST_ATTEMPTS) break
+      const delayMs = RETRY_DELAYS_MS[attempt - 1] ?? 0
+      logger.warn("poe.request.retrying", {
+        endpoint,
+        attempt,
+        reason: error instanceof DOMException && error.name === "TimeoutError" ? "timeout" : "network_error",
+        durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+        delayMs,
+        error,
+      })
+      await sleep(delayMs)
+    }
+  }
+  throw lastError ?? new Error("Poe request failed without a response")
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function isTerminal(r: PoeRow, wm: ImportState | undefined): boolean {

@@ -256,10 +256,78 @@ test("metric with limit renders progress bar with aria-valuenow", async () => {
   expect(creditsBar!.getAttribute("aria-valuemax")).toBe("100")
 })
 
+test("balance card with configured limit renders remaining progress", async () => {
+  await loadDashboard()
+  const poeCard = document.querySelector('[data-subscription="poe-api"]')!
+  const progress = within(poeCard as HTMLElement).getByRole("progressbar", { name: "API points remaining" })
+  expect(progress.getAttribute("aria-valuenow")).toBe("20")
+  expect(progress.classList.contains("metric-card__balance-progress")).toBe(true)
+  expect(progress.closest(".metric-card--quota")).toBeTruthy()
+  expect(within(poeCard as HTMLElement).getByText("20% remaining")).toBeTruthy()
+})
+
 test("critical metric card carries critical status marker", async () => {
   await loadDashboard()
   const creditsCard = document.querySelector('[data-metric="credits"]')
   expect(creditsCard?.getAttribute("data-status")).toBe("critical")
+})
+
+test("dynamic upstream account card shows provider identity, provenance, quota, and reset", async () => {
+  const payload = richPayload()
+  payload.subscriptions.push({
+    id: "cliproxy:codex:abc123",
+    name: "Codex",
+    identity: {
+      provider: "codex",
+      providerLabel: "Codex",
+      account: "alice@example.com",
+      plan: "Pro",
+      transport: "CLIProxy",
+    },
+    status: "ok",
+    lastRefreshAt: NOW_ISO,
+    metrics: [{
+      id: "codex:abc123:weekly",
+      providerMetricId: "codex:abc123:weekly",
+      metricKey: "cp|weekly",
+      label: "Weekly",
+      unit: "%",
+      status: "ok",
+      limit: 100,
+      used: 5,
+      remaining: 95,
+      percentUsed: 5,
+      window: { kind: "rolling", label: "Rolling 7d", duration: "7d", resetAt: FUTURE_2D },
+      display: { module: "period-quota-card", sourceConfidence: "known" },
+    }, {
+      id: "xai:abc123:on_demand", providerMetricId: "xai:abc123:on_demand", metricKey: "cp|payg",
+      label: "Pay as you go", unit: "status", status: "ok",
+      display: { module: "manual-status-card", sourceConfidence: "known", notes: "Disabled" },
+    }, {
+      id: "xai:abc123:monthly", providerMetricId: "xai:abc123:monthly", metricKey: "cp|monthly",
+      label: "Monthly credits", unit: "$", status: "ok", limit: 150, used: 0, remaining: 150, percentUsed: 0,
+      window: { kind: "rolling", label: "Rolling 30d", duration: "30d", resetAt: "2026-09-01T00:00:00.000Z" },
+      display: { module: "period-quota-card", sourceConfidence: "known" },
+    }],
+  })
+  await loadDashboard(payload)
+  const card = document.querySelector('[data-subscription="cliproxy:codex:abc123"]')!
+  expect(within(card as HTMLElement).getByText("Codex")).toBeTruthy()
+  expect(within(card as HTMLElement).getByRole("img", { name: "Codex logo" })).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("alice@example.com")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("Pro")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("via CLIProxy")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("Weekly")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("5%")).toBeTruthy()
+  expect(within(card as HTMLElement).getAllByText("95%").length).toBeGreaterThanOrEqual(2)
+  expect(within(card as HTMLElement).getByText("Window 7d")).toBeTruthy()
+  expect(within(card as HTMLElement).getByRole("progressbar", { name: "Weekly remaining" }).getAttribute("aria-valuenow")).toBe("95")
+  expect(within(card as HTMLElement).getAllByText("Reset").length).toBe(2)
+  expect(within(card as HTMLElement).getByText("Pay as you go")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("Disabled")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("Monthly credits")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("$150.00 / $150.00")).toBeTruthy()
+  expect(within(card as HTMLElement).getByRole("progressbar", { name: "Monthly credits remaining" }).getAttribute("aria-valuenow")).toBe("100")
 })
 
 test("summary cards show label, remaining or -, consumption, burn rate, exhaustion or -, and conservative approx", async () => {

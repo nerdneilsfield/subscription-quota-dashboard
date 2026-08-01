@@ -298,11 +298,47 @@ test("5xx response is retryable and free of secrets", async () => {
 })
 
 test("network error is retryable and free of secrets", async () => {
+  let attempts = 0
   const fn = (async (): Promise<Response> => {
+    attempts++
     throw new Error("connect ECONNREFUSED 127.0.0.1:443")
   }) as unknown as typeof fetch
   const res = await createPoeProvider(fn).refresh(buildInput())
   expect(res.errors).toHaveLength(1)
   expect(res.errors![0]!.retryable).toBe(true)
+  expect(res.errors![0]!.message).toContain("after 3 attempts")
+  expect(attempts).toBe(3)
   expect(JSON.stringify(res)).not.toContain("secret-key-xxx")
+})
+
+test("transient balance network error is retried and succeeds", async () => {
+  let balanceAttempts = 0
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("current_balance")) {
+      balanceAttempts++
+      if (balanceAttempts === 1) throw new TypeError("connection reset")
+      return makeResp(200, { current_point_balance: 987654 })
+    }
+    return makeResp(200, { data: [], has_more: false })
+  }
+  const res = await createPoeProvider(raw as unknown as typeof fetch).refresh(buildInput())
+  expect(balanceAttempts).toBe(2)
+  expect(res.errors).toBeUndefined()
+  expect(res.metrics[0]!.remaining).toBe(987654)
+})
+
+test("transient history 503 is retried without discarding balance", async () => {
+  let historyAttempts = 0
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("current_balance")) return makeResp(200, { current_point_balance: 500000 })
+    historyAttempts++
+    if (historyAttempts === 1) return makeResp(503, { error: "temporary" })
+    return makeResp(200, { data: [], has_more: false })
+  }
+  const res = await createPoeProvider(raw as unknown as typeof fetch).refresh(buildInput())
+  expect(historyAttempts).toBe(2)
+  expect(res.errors).toBeUndefined()
+  expect(res.metrics[0]!.remaining).toBe(500000)
 })

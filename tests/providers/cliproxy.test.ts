@@ -117,6 +117,18 @@ test("discovers accounts, filters by provider, skips disabled", async () => {
   const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
   expect(result.dynamicSubscriptions).toBeDefined()
   expect(result.dynamicSubscriptions!.length).toBe(4) // skip1 filtered, err001 kept
+  const codex = result.dynamicSubscriptions!.find((subscription) => subscription.id === "cliproxy:codex:abc123")!
+  expect(codex.name).toBe("Codex")
+  expect(codex.identity).toEqual({
+    provider: "codex",
+    providerLabel: "Codex",
+    account: "alice@example.com",
+    plan: "Pro",
+    transport: "CLIProxy",
+  })
+  expect(codex.ui?.group).toBe("Codex")
+  const grok = result.dynamicSubscriptions!.find((subscription) => subscription.id === "cliproxy:xai:ghi789")!
+  expect(grok.identity?.plan).toBe("SuperGrok")
 })
 
 test("codex: reset_at converted from Unix seconds to ISO", async () => {
@@ -159,8 +171,8 @@ test("claude: utilization used directly (NOT x100)", async () => {
   expect(claude5h.limit).toBe(100)
 })
 
-test("xai: two endpoints merged, monthly percent not capped", async () => {
-  // overage: used=1500, monthly_limit=1000 -> 150%
+test("xai: two endpoints merged, monthly credits preserve monetary overage", async () => {
+  // cents: used=1500, monthly_limit=1000 -> $15 / $10 and 150% in projection
   const xaiOverageWeekly = {
     status_code: 200,
     body: JSON.stringify({
@@ -199,16 +211,57 @@ test("xai: two endpoints merged, monthly percent not capped", async () => {
   }
   const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
   const monthly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:monthly")!
-  expect(monthly.used).toBe(150) // 1500/1000*100, NOT capped at 100
+  expect(monthly.used).toBe(15)
+  expect(monthly.limit).toBe(10)
+  expect(monthly.unit).toBe("$")
 })
 
-test("xai: weekly and on_demand metrics produced", async () => {
+test("xai: weekly and pay-as-you-go status metrics produced", async () => {
   const fetchImpl = makeFakeFetch()
   const result = await createCliproxyProvider(fetchImpl).refresh(buildInput())
   const weekly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:weekly")!
   expect(weekly.used).toBe(30)
   const onDemand = result.metrics.find(m => m.providerMetricId === "xai:ghi789:on_demand")!
-  expect(onDemand.used).toBe(20) // 100/500*100
+  expect(onDemand.sourceValueKind).toBe("status")
+  expect(onDemand.notes).toContain("Enabled")
+  expect(onDemand.notes).toContain("$5.00 cap")
+})
+
+test("xai: unified billing camelCase shape yields weekly, pay-as-you-go, and monthly credits", async () => {
+  const weekly = {
+    status_code: 200,
+    body: JSON.stringify({ config: {
+      currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-07-27T20:00:05Z", end: "2026-08-03T20:00:05Z" },
+      onDemandCap: { val: 0 }, onDemandUsed: { val: 0 }, isUnifiedBillingUser: true,
+    } }),
+  }
+  const monthly = {
+    status_code: 200,
+    body: JSON.stringify({ config: {
+      monthlyLimit: { val: 15000 }, used: { val: 0 }, onDemandCap: { val: 0 },
+      billingPeriodEnd: "2026-09-01T00:00:00Z",
+    } }),
+  }
+  const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input)
+    if (url.includes("/auth-files")) return makeResp(200, { files: [{ auth_index: "camel1", provider: "xai", label: "x@example.com" }] })
+    const body = JSON.parse(init?.body as string)
+    return makeResp(200, body.url.includes("format=credits") ? weekly : monthly)
+  }
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  const accountMetrics = result.metrics.filter((metric) => metric.providerMetricId.startsWith("xai:camel1:"))
+  expect(accountMetrics).toHaveLength(3)
+  const weeklyMetric = accountMetrics.find((metric) => metric.providerMetricId.endsWith(":weekly"))!
+  expect(weeklyMetric.label).toBe("Weekly quota")
+  expect(weeklyMetric.used).toBe(0)
+  expect(weeklyMetric.window?.resetAt).toBe("2026-08-03T20:00:05Z")
+  const payg = accountMetrics.find((metric) => metric.providerMetricId.endsWith(":on_demand"))!
+  expect(payg.notes).toBe("Disabled")
+  const monthlyMetric = accountMetrics.find((metric) => metric.providerMetricId.endsWith(":monthly"))!
+  expect(monthlyMetric.label).toBe("Monthly credits")
+  expect(monthlyMetric.limit).toBe(150)
+  expect(monthlyMetric.used).toBe(0)
+  expect(monthlyMetric.window?.resetAt).toBe("2026-09-01T00:00:00Z")
 })
 
 test("xai: required headers sent", async () => {
@@ -417,7 +470,8 @@ test("xai: weekly 500 + monthly 200 produces monthly metrics + partial warning",
   // Monthly metric should still be present
   const monthly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:monthly")
   expect(monthly).toBeDefined()
-  expect(monthly!.used).toBe(20) // 200/1000*100
+  expect(monthly!.used).toBe(2) // 200 cents -> $2.00
+  expect(monthly!.limit).toBe(10)
   // Weekly should be absent (weekly endpoint failed)
   const weekly = result.metrics.find(m => m.providerMetricId === "xai:ghi789:weekly")
   expect(weekly).toBeUndefined()

@@ -872,9 +872,10 @@ test("dynamic subscription projection produces metrics with synthetic config", (
   })
   const dynSubs = new Map([["cp-main", [{
     id: "cliproxy:codex:abc123",
-    name: "CLIProxy - Codex #1",
+    name: "Codex",
     providerMetricIds: ["codex:abc123:five_hour"],
-    ui: { group: "CLIProxy" },
+    identity: { provider: "codex", providerLabel: "Codex", account: "alice@example.com", plan: "Pro", transport: "CLIProxy" },
+    ui: { group: "Codex" },
   }]]])
   const providers: ProviderAccountProjection[] = [
     {
@@ -896,11 +897,12 @@ test("dynamic subscription projection produces metrics with synthetic config", (
   })
   expect(payload.subscriptions).toHaveLength(2)
   const dynSub = payload.subscriptions.find(s => s.id === "cliproxy:codex:abc123")!
-  expect(dynSub.name).toBe("CLIProxy - Codex #1")
+  expect(dynSub.name).toBe("Codex")
+  expect(dynSub.identity).toEqual({ provider: "codex", providerLabel: "Codex", account: "alice@example.com", plan: "Pro", transport: "CLIProxy" })
   expect(dynSub.metrics).toHaveLength(1)
   expect(dynSub.metrics[0]!.label).toBe("5h")
   expect(dynSub.metrics[0]!.used).toBe(72)
-  expect(dynSub.metrics[0]!.display.module).toBe("rolling-window-card")
+  expect(dynSub.metrics[0]!.display.module).toBe("period-quota-card")
 })
 
 test("dynamic metrics excluded from summary groups", () => {

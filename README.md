@@ -45,6 +45,8 @@ NODE_ENV=production bun run start
 | `SELF_DASHBOARD_VIEW_KEY`   | 128-bit random string used as the login view key for the `self` profile. |
 | `SESSION_SECRET`            | 256-bit random secret used to sign session cookies. Required.            |
 | `PORT`                      | Server port. Defaults to `3000`.                                         |
+| `LOG_LEVEL`                 | `debug`, `info`, `warn`, `error`, or `silent`; defaults to `debug` in development and `info` in production. |
+| `LOG_FORMAT`                | `pretty` for readable local logs or `json` for structured production ingestion. |
 
 > **There is no `viewKey` in any URL.** Authentication is done via a signed
 > session cookie issued after the one-time login flow. Never put `viewKey` or
@@ -132,3 +134,23 @@ No favicon is included in this MVP; browsers will get the default 404 for
 | `bun run start`           | Run the built server (production).                     |
 | `bun run typecheck`       | `tsc --noEmit`.                                        |
 | `bun test`                | Run the full test suite.                               |
+
+## Logging
+
+The server emits structured lifecycle logs for HTTP requests, authentication,
+profile refreshes, provider calls, CLIProxy account discovery/querying, cache
+writes, and failures. Every HTTP request receives an `X-Request-Id`; the same ID
+appears on all refresh logs caused by that request.
+
+Development defaults to detailed readable output:
+
+```env
+LOG_LEVEL=debug
+LOG_FORMAT=pretty
+```
+
+Production defaults to newline-delimited JSON at `info` level. Set
+`LOG_LEVEL=debug` temporarily when diagnosing provider calls. Authorization,
+cookies, API keys, tokens, passwords, view keys, and session secrets are
+recursively replaced with `[REDACTED]`; response bodies and credentials are not
+logged.

@@ -1,5 +1,7 @@
 import type { DashboardSubscription, DashboardSubscriptionError } from "../../shared/dashboard-payload"
 import { MetricCard } from "./MetricCard"
+import { UpstreamAccountCard } from "./UpstreamAccountCard"
+import { ProviderLogo } from "./ProviderLogo"
 
 interface SubscriptionCardProps {
   subscription: DashboardSubscription
@@ -10,14 +12,18 @@ export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
   const unavailable = subscription.status === "unavailable"
   const stale = subscription.status === "stale"
   const hasMetrics = subscription.metrics.length > 0
+  const isUpstreamAccount = subscription.identity !== undefined
   return (
     <section
       className={`subscription-card${unavailable ? " subscription-card--unavailable" : ""}`}
       data-subscription={subscription.id}
       data-status={subscription.status}
     >
-      <header className="subscription-card__header">
-        <h3>{subscription.name}</h3>
+      {isUpstreamAccount ? <UpstreamAccountCard subscription={subscription} now={now} /> : <><header className="subscription-card__header">
+        <div className="subscription-card__identity">
+          <ProviderLogo label={subscription.name} />
+          <h3>{subscription.name}</h3>
+        </div>
         <span className={`status-badge status-${subscription.status}`} data-status={subscription.status}>
           <span className="status-badge__icon" aria-hidden="true">{ICON[subscription.status]}</span>
           <span className="status-badge__text">{LABEL[subscription.status]}</span>
@@ -35,7 +41,8 @@ export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
         <div className="subscription-card__unavailable">
           {subscription.errors?.[0]?.message ?? "This subscription is currently unavailable."}
         </div>
-      )}
+      )}</>}
+      {isUpstreamAccount && subscription.errors?.map((err, i) => <ErrorBanner key={i} error={err} stale={stale} />)}
     </section>
   )
 }

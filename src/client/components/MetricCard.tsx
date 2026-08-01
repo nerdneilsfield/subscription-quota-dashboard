@@ -30,19 +30,21 @@ interface MetricCardProps {
 export function MetricCard({ metric, now }: MetricCardProps) {
   const status = metric.status
   const unknownRange = metric.rangeStats?.source === "unknown"
+  const hasQuota = metric.display.module === "balance-card" || metric.display.module === "period-quota-card"
+  const hasTrend = (metric.rangeStats?.series?.length ?? 0) >= 2
   return (
-    <article className="metric-card" data-metric={metric.id} data-status={status}>
+    <article className={`metric-card${hasQuota ? " metric-card--quota" : ""}${hasTrend ? "" : " metric-card--no-trend"}`} data-metric={metric.id} data-status={status}>
       <header className="metric-card__header">
         <h4 className="metric-card__label">{metric.label}</h4>
         <span className={`status-badge status-${status}`} data-status={status}>
           <span className="status-badge__icon" aria-hidden="true">{STATUS_ICON[status]}</span>
           <span className="status-badge__text">{STATUS_LABEL[status]}</span>
         </span>
+        {metric.window?.label && <div className="metric-card__window">{metric.window.label}</div>}
       </header>
-      {metric.window?.label && <div className="metric-card__window">{metric.window.label}</div>}
       {unknownRange && <div className="metric-card__unknown">insufficient data</div>}
       {!unknownRange && <ModuleBody metric={metric} now={now} />}
-      {metric.rangeStats && metric.rangeStats.source !== "unknown" && (
+      {hasTrend && metric.rangeStats && metric.rangeStats.source !== "unknown" && (
         <div className="metric-card__sparkline">
           <Sparkline series={metric.rangeStats.series} status={status} />
         </div>
@@ -67,19 +69,36 @@ function ModuleBody({ metric, now }: { metric: DashboardMetric; now: Date }) {
 
 function BalanceBody({ metric }: { metric: DashboardMetric }) {
   const burn = metric.rangeStats?.burnRate
+  const remainingPercent = metric.limit && metric.limit > 0 && metric.remaining !== undefined
+    ? Math.min(100, Math.max(0, (metric.remaining / metric.limit) * 100))
+    : undefined
   return (
-    <div className="metric-card__body">
-      <div className="metric-stat">
-        <span className="metric-stat__value">{metric.remaining != null ? formatNumber(metric.remaining) : "—"}</span>
-        <span className="metric-stat__unit">{metric.unit}</span>
-        <span className="metric-stat__caption">remaining</span>
+    <div className="metric-card__body metric-card__body--quota">
+      <div className="metric-card__primary">
+        <div className="metric-stat metric-stat--primary">
+          <span className="metric-stat__value">{metric.remaining != null ? formatNumber(metric.remaining) : "—"}</span>
+          <span className="metric-stat__unit">{metric.unit}</span>
+          <span className="metric-stat__caption">remaining</span>
+        </div>
+        {remainingPercent !== undefined && <strong className="metric-card__percent metric-card__percent--primary">{Math.round(remainingPercent)}%</strong>}
       </div>
-      {burn && (
-        <div className="metric-stat metric-stat--inline">
-          <span className="metric-stat__label">Burn</span>
-          <span className="metric-stat__value">{formatBurnRate(burn.value)}</span>
+      {remainingPercent !== undefined && (
+        <div
+          className="progress metric-card__balance-progress"
+          role="progressbar"
+          aria-label={`${metric.label} remaining`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(remainingPercent)}
+          data-status={metric.status}
+        >
+          <div className="progress__fill" style={{ width: `${remainingPercent}%` }} />
         </div>
       )}
+      <div className="metric-card__quota-meta">
+        <span>{remainingPercent !== undefined ? `${Math.round(remainingPercent)}% remaining` : "Limit not reported"}</span>
+        {burn && <span>Burn <strong>{formatBurnRate(burn.value)}</strong></span>}
+      </div>
     </div>
   )
 }
@@ -106,16 +125,15 @@ function PeriodBody({ metric }: { metric: DashboardMetric }) {
   const barWidth = Math.min(100, Math.max(0, percent))
   const hasBar = limit != null
   return (
-    <div className="metric-card__body">
-      <div className="metric-card__quota">
-        <span>{formatNumber(used)}</span>
-        <span className="metric-card__quota-sep">/</span>
-        <span>{limit != null ? formatNumber(limit) : "-"}</span>
-        <span className="metric-stat__unit">{metric.unit}</span>
-      </div>
-      <div className="metric-stat metric-stat--inline">
-        <span className="metric-stat__label">Remaining</span>
-        <span className="metric-stat__value">{metric.remaining != null ? formatNumber(metric.remaining) : "-"}</span>
+    <div className="metric-card__body metric-card__body--quota">
+      <div className="metric-card__primary">
+        <div className="metric-card__quota">
+          <span>{formatNumber(used)}</span>
+          <span className="metric-card__quota-sep">/</span>
+          <span>{limit != null ? formatNumber(limit) : "-"}</span>
+          <span className="metric-stat__unit">{metric.unit}</span>
+        </div>
+        {hasBar && <strong className="metric-card__percent metric-card__percent--primary">{formatPercentUsed(percent, overflow)}</strong>}
       </div>
       {hasBar && (
         <div
@@ -129,7 +147,10 @@ function PeriodBody({ metric }: { metric: DashboardMetric }) {
           <div className="progress__fill" style={{ width: `${barWidth}%` }} />
         </div>
       )}
-      <div className="metric-card__percent">{formatPercentUsed(percent, overflow)}</div>
+      <div className="metric-card__quota-meta">
+        <span>Used {formatPercentUsed(percent, overflow)}</span>
+        <span>Remaining <strong>{metric.remaining != null ? formatNumber(metric.remaining) : "-"}</strong></span>
+      </div>
     </div>
   )
 }

@@ -229,19 +229,23 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
 
   const unavailable = payload.subscriptions.length > 0 && payload.subscriptions.every((s) => s.status === "unavailable")
   const anyStale = payload.subscriptions.some((s) => s.status === "stale" || s.errors?.some((e) => e.stale) === true)
+  const upstreamSubscriptions = payload.subscriptions.filter((s) => s.identity !== undefined)
+  const directSubscriptions = payload.subscriptions.filter((s) => s.identity === undefined)
+  const healthyCount = payload.subscriptions.filter((s) => s.status === "ok").length
+  const attentionCount = payload.subscriptions.length - healthyCount
+  const metricCount = payload.subscriptions.reduce((sum, subscription) => sum + subscription.metrics.length, 0)
 
   return (
-    <div className="dashboard">
+    <div className="dashboard" data-system-status={attentionCount > 0 ? "attention" : "nominal"}>
       <header className="dashboard__header">
         <div className="dashboard__identity">
-          <span className="dashboard__wordmark">Quota dashboard</span>
+          <span className="dashboard__wordmark">SQD / QUOTA OPERATIONS</span>
           <div className="dashboard__title">
             <h1>{payload.profile.name}</h1>
-            <p className="dashboard__meta">
-              {anyStale && <span className="header-warn" aria-label="stale data" title="Some data is stale">▲</span>}
-              <span>Updated </span>
-              <TimeDisplay iso={payload.generatedAt} now={now} />
-            </p>
+            <span className={`system-state${attentionCount > 0 ? " system-state--attention" : ""}`}>
+              <span aria-hidden="true">●</span>
+              {attentionCount > 0 ? "ATTENTION" : "NOMINAL"}
+            </span>
           </div>
         </div>
         <div className="dashboard__controls">
@@ -256,6 +260,13 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
             <span aria-live="polite"><RefreshLabel state={refresh} /></span>
           </button>
         </div>
+        <dl className="dashboard__telemetry">
+          <div><dt>Accounts</dt><dd>{payload.subscriptions.length}</dd></div>
+          <div><dt>Upstreams</dt><dd>{upstreamSubscriptions.length}</dd></div>
+          <div><dt>Metrics</dt><dd>{metricCount}</dd></div>
+          <div><dt>Healthy</dt><dd>{healthyCount}</dd></div>
+          <div><dt>Attention</dt><dd data-attention={attentionCount > 0}>{attentionCount}</dd></div>
+        </dl>
       </header>
 
       <div className="dashboard__range-rail">
@@ -265,6 +276,11 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
           onSelect={onRangeChange ?? (() => {})}
           loading={rangeLoading}
         />
+        <p className="dashboard__meta">
+          {anyStale && <span className="header-warn" aria-label="stale data" title="Some data is stale">▲ STALE SOURCE</span>}
+          <span>SNAPSHOT </span>
+          <TimeDisplay iso={payload.generatedAt} now={now} />
+        </p>
       </div>
 
       {unavailable && (
@@ -279,27 +295,43 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
         <main className="dashboard__body">
           {payload.summaryGroups.length > 0 && (
             <section className="dashboard__summary" aria-label="Quota summary">
+              <div className="section-heading">
+                <div><span className="section-heading__index">01</span><h2>Resource telemetry</h2></div>
+                <p>{range} consumption window</p>
+              </div>
               <SummaryRow groups={payload.summaryGroups} now={now} />
             </section>
           )}
-          <section className="dashboard__subscriptions" aria-labelledby="subscriptions-heading">
+          {upstreamSubscriptions.length > 0 && <section className="dashboard__subscriptions" aria-labelledby="upstream-heading">
             <div className="section-heading">
-              <h2 id="subscriptions-heading">Subscriptions</h2>
-              <p>{payload.subscriptions.length} configured</p>
+              <div><span className="section-heading__index">02</span><h2 id="upstream-heading">Upstream accounts</h2></div>
+              <p>{upstreamSubscriptions.length} discovered via proxy</p>
             </div>
-            <div className="subscriptions-grid">
-              {payload.subscriptions.map((s) => (
+            <div className="subscriptions-grid subscriptions-grid--upstream">
+              {upstreamSubscriptions.map((s) => (
                 <SubscriptionCard key={s.id} subscription={s} now={now} />
               ))}
             </div>
-          </section>
+          </section>}
+          {directSubscriptions.length > 0 && <section className="dashboard__subscriptions" aria-labelledby="direct-heading">
+            <div className="section-heading">
+              <div><span className="section-heading__index">03</span><h2 id="direct-heading">Direct & manual</h2></div>
+              <p>{directSubscriptions.length} configured sources</p>
+            </div>
+            <div className="subscriptions-grid subscriptions-grid--direct">
+              {directSubscriptions.map((s) => (
+                <SubscriptionCard key={s.id} subscription={s} now={now} />
+              ))}
+            </div>
+          </section>}
         </main>
       )}
 
       <footer className="dashboard__footer">
         <p>
-          <span>{range} range</span>
-          <span>Generated <TimeDisplay iso={payload.generatedAt} now={now} /></span>
+          <span>SQD / {payload.profile.id}</span>
+          <span>{range} RANGE</span>
+          <span>GENERATED <TimeDisplay iso={payload.generatedAt} now={now} /></span>
         </p>
       </footer>
     </div>

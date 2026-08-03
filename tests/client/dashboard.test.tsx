@@ -314,7 +314,7 @@ test("dynamic upstream account card shows provider identity, provenance, quota, 
   const card = document.querySelector('[data-subscription="cliproxy:codex:abc123"]')!
   expect(within(card as HTMLElement).getByText("Codex")).toBeTruthy()
   expect(within(card as HTMLElement).getByRole("img", { name: "Codex logo" })).toBeTruthy()
-  expect(within(card as HTMLElement).getByText("alice@example.com")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText("al•ce@ex••••e.com")).toBeTruthy()
   expect(within(card as HTMLElement).getByText("Pro")).toBeTruthy()
   expect(within(card as HTMLElement).getByText("via CLIProxy")).toBeTruthy()
   expect(within(card as HTMLElement).getByText("Weekly")).toBeTruthy()
@@ -328,6 +328,12 @@ test("dynamic upstream account card shows provider identity, provenance, quota, 
   expect(within(card as HTMLElement).getByText("Monthly credits")).toBeTruthy()
   expect(within(card as HTMLElement).getByText("$150.00 / $150.00")).toBeTruthy()
   expect(within(card as HTMLElement).getByRole("progressbar", { name: "Monthly credits remaining" }).getAttribute("aria-valuenow")).toBe("100")
+})
+
+test("direct subscription shows last updated time", async () => {
+  await loadDashboard()
+  const card = document.querySelector('[data-subscription="poe-api"]')!
+  expect(card.querySelector(".subscription-card__updated")?.textContent).toBe("Updated just now")
 })
 
 test("summary cards show label, remaining or -, consumption, burn rate, exhaustion or -, and conservative approx", async () => {

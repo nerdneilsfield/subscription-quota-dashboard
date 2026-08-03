@@ -4,6 +4,7 @@ import {
   formatBurnRate,
   formatPercentUsed,
   formatRelativeTime,
+  maskAccount,
 } from "../../src/client/format"
 
 const NOW = new Date("2026-06-25T12:00:00.000Z")
@@ -50,4 +51,9 @@ test("formatRelativeTime renders future buckets", () => {
 test("formatRelativeTime renders past buckets", () => {
   expect(formatRelativeTime("2026-06-25T11:55:00.000Z", NOW)).toBe("5m ago")
   expect(formatRelativeTime("2026-06-25T09:00:00.000Z", NOW)).toBe("3h ago")
+})
+
+test("maskAccount masks email local part and domain separately", () => {
+  expect(maskAccount("mendelan27@gmail.com")).toBe("me••••••27@gm••l.com")
+  expect(maskAccount("alice@example.com")).toBe("al•ce@ex••••e.com")
 })

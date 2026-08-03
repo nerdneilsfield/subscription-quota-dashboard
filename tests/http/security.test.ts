@@ -77,11 +77,13 @@ describe("redactForLog", () => {
     expect(out.headers["Set-Cookie"]).toBe("[redacted]")
   })
 
-  test("redacts JSON fields viewKey, apiKey, password", () => {
-    const input = { viewKey: "k", apiKey: "a", password: "p", keep: "v" }
+  test("redacts JSON fields viewKey, apiKey, authCookie, sessionCookie, password", () => {
+    const input = { viewKey: "k", apiKey: "a", authCookie: "c", sessionCookie: "s", password: "p", keep: "v" }
     const out = redactForLog(input) as Record<string, string>
     expect(out.viewKey).toBe("[redacted]")
     expect(out.apiKey).toBe("[redacted]")
+    expect(out.authCookie).toBe("[redacted]")
+    expect(out.sessionCookie).toBe("[redacted]")
     expect(out.password).toBe("[redacted]")
     expect(out.keep).toBe("v")
   })

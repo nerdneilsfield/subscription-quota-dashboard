@@ -27,7 +27,7 @@ function makeResp(status: number, body: unknown): Response {
 // plain async fake through `unknown` to satisfy `typeof fetch`.
 type FakeFetch = typeof fetch
 
-test("volcengine AFP non-empty -> emit AFP tiers, no CodingPlan call", async () => {
+test("volcengine AFP-only config emits AFP tiers without Coding Plan call", async () => {
   const calls: string[] = []
   const raw = async (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input)
@@ -56,6 +56,73 @@ test("volcengine AFP non-empty -> emit AFP tiers, no CodingPlan call", async () 
   expect(fiveHour.remaining).toBe(700)
   expect(fiveHour.sourceValueKind).toBe("gauge-used")
   expect(fiveHour.notes).toContain("Agent Plan Pro")
+})
+
+test("volcengine dual-plan config returns Agent Plan and Coding Plan independently", async () => {
+  const calls: string[] = []
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input)
+    calls.push(url)
+    if (url.includes("GetAFPUsage")) {
+      return makeResp(200, {
+        ResponseMetadata: {},
+        Result: {
+          PlanType: "medium",
+          AFPFiveHour: { Quota: 10000, Used: 100 },
+          AFPWeekly: { Quota: 35000, Used: 200 },
+          AFPMonthly: { Quota: 100000, Used: 300 },
+        },
+      })
+    }
+    return makeResp(200, {
+      ResponseMetadata: {},
+      Result: {
+        QuotaUsage: [
+          { Level: "session", Percent: 40 },
+          { Level: "weekly", Percent: 60 },
+          { Level: "monthly", Percent: 20 },
+        ],
+      },
+    })
+  }
+  const codingPlanMetrics: MetricConfig[] = [
+    { id: "cp-5h", providerMetricId: "cp:five_hour", label: "CP 5h", unit: "%", display: { module: "period-quota-card" } },
+    { id: "cp-wk", providerMetricId: "cp:weekly_limit", label: "CP Weekly", unit: "%", display: { module: "period-quota-card" } },
+    { id: "cp-mo", providerMetricId: "cp:monthly", label: "CP Monthly", unit: "%", display: { module: "period-quota-card" } },
+  ]
+  const result = await createVolcengineProvider(raw as unknown as FakeFetch).refresh(buildInput({ metrics: [...metrics, ...codingPlanMetrics] }))
+  expect(calls.filter((url) => url.includes("GetAFPUsage"))).toHaveLength(1)
+  expect(calls.filter((url) => url.includes("GetCodingPlanUsage"))).toHaveLength(1)
+  expect(result.metrics.map((metric) => metric.providerMetricId)).toEqual([
+    "afp:five_hour", "afp:weekly_limit", "afp:monthly",
+    "cp:five_hour", "cp:weekly_limit", "cp:monthly",
+  ])
+  expect(result.metrics[0]?.notes).toBe("Agent Plan medium")
+  expect(result.metrics[3]?.notes).toBe("Coding Plan")
+})
+
+test("volcengine AFP response aliases to configured Coding Plan metric ids", async () => {
+  const raw = async (): Promise<Response> => makeResp(200, {
+    ResponseMetadata: {},
+    Result: {
+      PlanType: "Pro",
+      AFPFiveHour: { Quota: 1000, Used: 300, ResetTime: "2026-07-17T05:00:00Z" },
+      AFPWeekly: { Quota: 10000, Used: 5000, ResetTime: "2026-07-24T00:00:00Z" },
+      AFPMonthly: { Quota: 100000, Used: 20000, ResetTime: "2026-08-01T00:00:00Z" },
+    },
+  })
+  const codingPlanMetrics: MetricConfig[] = [
+    { id: "5h", providerMetricId: "cp:five_hour", label: "5h quota", unit: "tokens", display: { module: "period-quota-card" } },
+    { id: "wk", providerMetricId: "cp:weekly_limit", label: "Weekly quota", unit: "tokens", display: { module: "period-quota-card" } },
+    { id: "mo", providerMetricId: "cp:monthly", label: "Monthly quota", unit: "tokens", display: { module: "period-quota-card" } },
+  ]
+  const result = await createVolcengineProvider(raw as unknown as FakeFetch).refresh(buildInput({ metrics: codingPlanMetrics }))
+  expect(result.metrics.map((metric) => metric.providerMetricId)).toEqual([
+    "cp:five_hour",
+    "cp:weekly_limit",
+    "cp:monthly",
+  ])
+  expect(result.metrics[0]?.label).toBe("5h quota")
 })
 
 test("volcengine AFP empty -> fallback to CodingPlanUsage", async () => {

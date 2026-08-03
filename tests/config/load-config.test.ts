@@ -133,6 +133,51 @@ test("deepseek provider unavailable when env missing and no fallback", () => {
   expect(config.providerRuntime.get("ds")?.reason).toContain("DEEPSEEK_MISSING_KEY")
 })
 
+test("OpenCode Go resolves workspace and session cookie separately", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "oc", type: "opencode-go", workspaceId: "wrk_TEST123", authCookie: "Fe26.test" }],
+    subscriptions: [],
+    profiles: [],
+  })
+  expect(config.providerRuntime.get("oc")).toEqual({
+    available: true,
+    workspaceId: "wrk_TEST123",
+    authCookie: "Fe26.test",
+  })
+})
+
+test("OpenCode Go rejects malformed workspace IDs and cookie header injection", () => {
+  const malformedWorkspace = loadDashboardConfig({
+    providers: [{ id: "oc", type: "opencode-go", workspaceId: "../admin", authCookie: "Fe26.test" }],
+    subscriptions: [],
+    profiles: [],
+  })
+  expect(malformedWorkspace.providerRuntime.get("oc")?.available).toBe(false)
+
+  const injectedCookie = loadDashboardConfig({
+    providers: [{ id: "oc", type: "opencode-go", workspaceId: "wrk_TEST123", authCookie: "Fe26.test\r\nX-Evil: 1" }],
+    subscriptions: [],
+    profiles: [],
+  })
+  expect(injectedCookie.providerRuntime.get("oc")?.available).toBe(false)
+})
+
+test("MiMo Token Plan resolves and validates its session cookie", () => {
+  const valid = loadDashboardConfig({
+    providers: [{ id: "mimo", type: "mimo-token-plan", sessionCookie: "api-platform_ph=secret" }],
+    subscriptions: [],
+    profiles: [],
+  })
+  expect(valid.providerRuntime.get("mimo")).toEqual({ available: true, authCookie: "api-platform_ph=secret" })
+
+  const injected = loadDashboardConfig({
+    providers: [{ id: "mimo", type: "mimo-token-plan", sessionCookie: "cookie\r\nX-Evil: 1" }],
+    subscriptions: [],
+    profiles: [],
+  })
+  expect(injected.providerRuntime.get("mimo")?.available).toBe(false)
+})
+
 test("siliconflow rejects loopback baseUrl (SSRF)", () => {
   expect(() => loadDashboardConfig({
     providers: [{ id: "sf", type: "siliconflow", baseUrl: "http://127.0.0.1:8080", apiKey: "k" }],

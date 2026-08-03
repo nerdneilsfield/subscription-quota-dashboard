@@ -53,6 +53,8 @@ export type ProviderAccountConfig =
   | { id: string; type: "minimax"; baseUrl?: string | undefined; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
   | { id: string; type: "zenmux"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
   | { id: string; type: "volcengine"; region?: string | undefined; akEnv?: string | undefined; ak?: string | undefined; skEnv?: string | undefined; sk?: string | undefined }
+  | { id: string; type: "mimo-token-plan"; sessionCookieEnv?: string | undefined; sessionCookie?: string | undefined }
+  | { id: string; type: "opencode-go"; workspaceIdEnv?: string | undefined; workspaceId?: string | undefined; authCookieEnv?: string | undefined; authCookie?: string | undefined }
   | { id: string; type: "cliproxy"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined; queryProviders?: string[] | undefined }
 
 export type SubscriptionConfig = {
@@ -70,6 +72,8 @@ export type ProviderRuntimeState = {
   apiKey?: string
   ak?: string
   sk?: string
+  workspaceId?: string
+  authCookie?: string
   reason?: string
 }
 export type DynamicSubscription = {

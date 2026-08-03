@@ -70,6 +70,28 @@ function resolveAkSkCredential(
   return { reason: ak.reason ?? sk.reason ?? "missing AK or SK" }
 }
 
+function resolveOpenCodeCredential(provider: Extract<ProviderAccountConfig, { type: "opencode-go" }>): ProviderRuntimeState {
+  const workspace = resolveBearerCredential({ apiKeyEnv: provider.workspaceIdEnv, apiKey: provider.workspaceId })
+  const cookie = resolveBearerCredential({ apiKeyEnv: provider.authCookieEnv, apiKey: provider.authCookie })
+  if (workspace.apiKey === undefined || cookie.apiKey === undefined) {
+    return { available: false, reason: workspace.reason ?? cookie.reason ?? "missing workspace ID or auth cookie" }
+  }
+  if (!/^wrk_[A-Za-z0-9]+$/.test(workspace.apiKey)) {
+    return { available: false, reason: "OpenCode workspace ID must match wrk_[A-Za-z0-9]+" }
+  }
+  if (/\r|\n/.test(cookie.apiKey)) {
+    return { available: false, reason: "OpenCode auth cookie contains invalid newline characters" }
+  }
+  return { available: true, workspaceId: workspace.apiKey, authCookie: cookie.apiKey }
+}
+
+function resolveMiMoCredential(provider: Extract<ProviderAccountConfig, { type: "mimo-token-plan" }>): ProviderRuntimeState {
+  const cookie = resolveBearerCredential({ apiKeyEnv: provider.sessionCookieEnv, apiKey: provider.sessionCookie })
+  if (cookie.apiKey === undefined) return { available: false, reason: cookie.reason ?? "missing MiMo session cookie" }
+  if (/\r|\n/.test(cookie.apiKey)) return { available: false, reason: "MiMo session cookie contains invalid newline characters" }
+  return { available: true, authCookie: cookie.apiKey }
+}
+
 function isPrivateIPv4(a: number, b: number, c: number, d: number): boolean {
   if (a === 0) return true // 0.0.0.0/8 (unspecified + reserved)
   if (a === 127) return true // loopback
@@ -276,6 +298,12 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
           : { available: false, reason: reason ?? "missing AK or SK" }
       providers.set(provider.id, { ...provider, region })
       providerRuntime.set(provider.id, state)
+    } else if (provider.type === "mimo-token-plan") {
+      providers.set(provider.id, provider)
+      providerRuntime.set(provider.id, resolveMiMoCredential(provider))
+    } else if (provider.type === "opencode-go") {
+      providers.set(provider.id, provider)
+      providerRuntime.set(provider.id, resolveOpenCodeCredential(provider))
     } else if (provider.type === "cliproxy") {
       if (!provider.baseUrl) {
         fail(`${providerPath}.baseUrl`, "cliproxy requires baseUrl")

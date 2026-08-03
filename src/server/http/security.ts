@@ -11,6 +11,8 @@ const SENSITIVE_KEYS = new Set([
   "set-cookie",
   "viewkey",
   "apikey",
+  "authcookie",
+  "sessioncookie",
   "password",
 ])
 

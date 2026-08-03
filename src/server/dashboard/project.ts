@@ -428,7 +428,7 @@ function buildDashboardMetric(
     thresholds: config.display.thresholds,
   })
 
-  const display = buildDisplay(config, window, sourceConfidence, p.resolvedUsageFilter)
+  const display = buildDisplay(config, pm, window, sourceConfidence, p.resolvedUsageFilter)
 
   const metric: DashboardMetric = {
     id: config.id,
@@ -450,6 +450,7 @@ function buildDashboardMetric(
 
 function buildDisplay(
   config: MetricConfig,
+  providerMetric: NormalizedMetric | undefined,
   window: DashboardWindow | undefined,
   sourceConfidence: "known" | "estimated" | "unknown",
   resolvedUsageFilter: UsageFilter,
@@ -457,12 +458,14 @@ function buildDisplay(
   const subtitle = window
     ? labelWindow(toLimitWindowForLabel(window), window.resetAt)
     : undefined
+  const notes = config.notes ?? providerMetric?.notes
+  const updatedAt = config.updatedAt ?? providerMetric?.updatedAt
   const display: DashboardMetricDisplay = {
     module: config.display.module,
     title: config.label,
     ...(subtitle !== undefined ? { subtitle } : {}),
-    ...(config.notes !== undefined ? { notes: config.notes } : {}),
-    ...(config.updatedAt !== undefined ? { updatedAt: config.updatedAt } : {}),
+    ...(notes !== undefined ? { notes } : {}),
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
     sourceConfidence,
     ...(hasUsageFilter(resolvedUsageFilter) ? { usageFilter: resolvedUsageFilter } : {}),
     ...(config.display.thresholds ? { thresholds: config.display.thresholds } : {}),

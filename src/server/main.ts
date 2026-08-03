@@ -19,6 +19,8 @@ import { createMiniMaxProvider } from "./providers/minimax"
 import { createZenmuxProvider } from "./providers/zenmux"
 import { createVolcengineProvider } from "./providers/volcengine"
 import { createCliproxyProvider } from "./providers/cliproxy"
+import { createOpenCodeGoProvider } from "./providers/opencode-go"
+import { createMiMoTokenPlanProvider } from "./providers/mimo-token-plan"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 import { parseTrustedProxies } from "./http/client-ip"
@@ -102,6 +104,8 @@ async function main(): Promise<void> {
     ["minimax", createMiniMaxProvider(loggedFetch)],
     ["zenmux", createZenmuxProvider(loggedFetch)],
     ["volcengine", createVolcengineProvider(loggedFetch)],
+    ["mimo-token-plan", createMiMoTokenPlanProvider(loggedFetch)],
+    ["opencode-go", createOpenCodeGoProvider(loggedFetch)],
     ["cliproxy", createCliproxyProvider(loggedFetch)],
   ])
 

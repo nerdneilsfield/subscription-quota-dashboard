@@ -37,6 +37,8 @@ function isSensitiveKey(key: string): boolean {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "")
   return normalized === "authorization"
     || normalized === "cookie"
+    || normalized === "authcookie"
+    || normalized === "sessioncookie"
     || normalized === "setcookie"
     || normalized === "apikey"
     || normalized === "token"

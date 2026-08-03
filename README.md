@@ -236,9 +236,10 @@ logged.
 
 ## OpenCode Go
 
-OpenCode Go reads the authenticated workspace page because OpenCode does not
-currently expose a documented personal quota API. Configure the workspace ID
-and the value of the `auth` cookie (the `Fe26...` token only):
+OpenCode Go uses the authenticated SolidStart `lite.subscription.get` server
+function because OpenCode does not currently expose a documented personal quota
+API. Configure the workspace ID and the value of the `auth` cookie (the
+`Fe26...` token only):
 
 ```env
 OPENCODE_WORKSPACE_ID=wrk_...
@@ -246,10 +247,11 @@ OPENCODE_AUTH_COOKIE=Fe26...
 ```
 
 The adapter extracts the real 5-hour, weekly, and monthly percentages and reset
-times from the server-rendered `lite.subscription.get` payload. It retries
-transient `429`/`5xx` failures and reports an explicit authentication error when
-the session expires. Treat this cookie like a password; keep it only in `.env`
-and replace it after logging out of OpenCode.
+times from the server-function stream without `eval`. It bypasses the workspace
+page's unrelated `user.time_seen` database write, which can fail independently
+with HTTP 500. It retries transient `429`/`5xx` failures and reports an explicit
+authentication error when the session expires. Treat this cookie like a
+password; keep it only in `.env` and replace it after logging out of OpenCode.
 
 ## Xiaomi MiMo Token Plan
 

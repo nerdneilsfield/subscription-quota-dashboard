@@ -1,5 +1,5 @@
 import type { DashboardMetric, DashboardSubscription } from "../../shared/dashboard-payload"
-import { formatNumber, formatPercentUsed } from "../format"
+import { formatNumber, formatPercentUsed, maskAccount } from "../format"
 import { TimeDisplay } from "./TimeDisplay"
 import { getStatusLabel } from "./MetricCard"
 import { ProviderLogo } from "./ProviderLogo"
@@ -19,7 +19,7 @@ export function UpstreamAccountCard({ subscription, now }: { subscription: Dashb
               <h3>{identity.providerLabel}</h3>
               {identity.plan && <span className="upstream-card__plan">{identity.plan}</span>}
             </div>
-            <div className="upstream-card__account">{identity.account ?? t("account", { id: subscription.id.split(":").at(-1)?.slice(0, 8) ?? "" })}</div>
+            <div className="upstream-card__account">{maskAccount(identity.account ?? t("account", { id: subscription.id.split(":").at(-1)?.slice(0, 8) ?? "" }))}</div>
           </div>
         </div>
         <div className="upstream-card__provenance">

@@ -767,6 +767,17 @@ test("payload exposes generatedAt and selectedRange defaults to 24h", () => {
   expect(payload.profile).toEqual({ id: "self", name: "Personal" })
 })
 
+test("payload exposes configured dashboard slogan", () => {
+  const config = makeConfig(baseConfig({ branding: { slogan: "My quota room" } }))
+  const payload = buildDashboardPayload({
+    config,
+    profileId: "self",
+    generatedAt: NOW,
+    providers: [{ providerAccountId: "poe-main", metrics: [poeBalanceMetric("points", 500)], cache: okCache }],
+  })
+  expect(payload.branding).toEqual({ slogan: "My quota room" })
+})
+
 test("non-poe gauge-remaining over limit shows ok status (isOverLimit)", () => {
   const config = makeConfig({
     providers: [{ id: "ds", type: "deepseek", apiKey: "k" }],

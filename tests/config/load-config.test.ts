@@ -38,6 +38,15 @@ test("normalizes a valid config", () => {
   expect(config.subscriptions.get("poe-api")?.metrics[0]?.providerMetricId).toBe("points")
 })
 
+test("preserves a configured dashboard slogan", () => {
+  const config = loadDashboardConfig({ ...baseConfig, branding: { slogan: "My quota room" } })
+  expect(config.branding).toEqual({ slogan: "My quota room" })
+})
+
+test("rejects an empty dashboard slogan", () => {
+  expect(() => loadDashboardConfig({ ...baseConfig, branding: { slogan: "   " } })).toThrow("branding.slogan")
+})
+
 test("rejects a missing viewKey with profile id", () => {
   const invalid: DashboardConfigInput = {
     ...baseConfig,

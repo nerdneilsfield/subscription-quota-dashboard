@@ -217,6 +217,12 @@ test("renders profile name, API points, Rolling 5h label, critical, range button
   expect(screen().getAllByText("Critical").length).toBeGreaterThan(0)
 })
 
+test("renders configured dashboard slogan", async () => {
+  await loadDashboard({ ...richPayload(), branding: { slogan: "My quota room" } })
+  expect(screen().getByText("My quota room")).toBeTruthy()
+  expect(screen().queryByText("SQD / QUOTA OPERATIONS")).toBeNull()
+})
+
 test("range button 24h is aria-pressed true, others false", async () => {
   await loadDashboard()
   expect(screen().getByRole("button", { name: "24h" }).getAttribute("aria-pressed")).toBe("true")

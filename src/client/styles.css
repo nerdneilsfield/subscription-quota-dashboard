@@ -170,6 +170,8 @@ button { cursor: pointer; }
 .subscription-card__header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); min-height: 4rem; padding: var(--space-sm); border-bottom: var(--rule-hairline) solid var(--color-rule-2); background: var(--color-paper-raised); }
 .subscription-card__identity { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
 .subscription-card__header h3 { margin: 0; color: var(--color-ink); font-family: var(--font-display); font-size: var(--text-md); font-weight: 700; overflow-wrap: anywhere; }
+.subscription-card__status { display: grid; justify-items: end; gap: var(--space-3xs); flex: 0 0 auto; }
+.subscription-card__updated { color: var(--color-dim); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 .subscription-card__metrics { display: grid; }
 .subscription-card__metrics--stale { opacity: 0.62; }
 .subscription-card__unavailable { padding: var(--space-xl) var(--space-sm); color: var(--color-muted); text-align: center; }

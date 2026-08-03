@@ -3,6 +3,7 @@ import { MetricCard } from "./MetricCard"
 import { UpstreamAccountCard } from "./UpstreamAccountCard"
 import { ProviderLogo } from "./ProviderLogo"
 import { getStatusLabel } from "./MetricCard"
+import { TimeDisplay } from "./TimeDisplay"
 import { useI18n } from "../i18n"
 
 interface SubscriptionCardProps {
@@ -27,10 +28,13 @@ export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
           <ProviderLogo label={subscription.name} />
           <h3>{subscription.name}</h3>
         </div>
-        <span className={`status-badge status-${subscription.status}`} data-status={subscription.status}>
-          <span className="status-badge__icon" aria-hidden="true">{ICON[subscription.status]}</span>
-          <span className="status-badge__text">{getStatusLabel(subscription.status, t)}</span>
-        </span>
+        <div className="subscription-card__status">
+          <span className={`status-badge status-${subscription.status}`} data-status={subscription.status}>
+            <span className="status-badge__icon" aria-hidden="true">{ICON[subscription.status]}</span>
+            <span className="status-badge__text">{getStatusLabel(subscription.status, t)}</span>
+          </span>
+          {subscription.lastRefreshAt && <span className="subscription-card__updated">{t("updated")} <TimeDisplay iso={subscription.lastRefreshAt} now={now} /></span>}
+        </div>
       </header>
       {subscription.errors?.map((err, i) => <ErrorBanner key={i} error={err} stale={stale} />)}
       {hasMetrics && (

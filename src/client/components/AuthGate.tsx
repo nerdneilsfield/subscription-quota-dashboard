@@ -3,8 +3,10 @@ import type { DashboardPayload } from "../../shared/dashboard-payload"
 import type { RangeKey } from "../../shared/domain"
 import { createSession, getDashboard } from "../api"
 import { Dashboard } from "./Dashboard"
+import { LanguageSwitch } from "./LanguageSwitch"
 import { LoadingState } from "./LoadingState"
 import { NetworkError } from "./NetworkError"
+import { getApiErrorMessage, useI18n } from "../i18n"
 
 type AuthState = "checking-session" | "unauthenticated" | "submitting" | "authenticated" | "expired"
 
@@ -15,6 +17,7 @@ interface AuthGateProps {
 }
 
 export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
+  const { t } = useI18n()
   const [auth, setAuth] = useState<AuthState>("checking-session")
   const [initialPayload, setInitialPayload] = useState<DashboardPayload | undefined>()
   const [formError, setFormError] = useState<string | undefined>()
@@ -46,7 +49,7 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
       } else if (res.code === "unauthorized") {
         setAuth("unauthenticated")
       } else {
-        setSessionError(res.message)
+        setSessionError(getApiErrorMessage(res.code, t))
       }
     })()
     return () => {
@@ -80,29 +83,29 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
         setAuth("authenticated")
       } else if (dash.code === "unauthorized") {
         setAuth("expired")
-        setFormError("Session expired. Enter your view key again.")
+        setFormError(t("sessionExpired"))
       } else {
         // Dashboard GET failed (network/server error): show the error on the
         // form so the user can retry, instead of silently going to unauthenticated.
         setAuth("unauthenticated")
-        setFormError(dash.message || "Failed to load dashboard after login. Please try again.")
+        setFormError(dash.message || getApiErrorMessage(dash.code, t) || t("dashboardLoadAfterLoginFailed"))
       }
       return
     }
     if (res.code === "unauthorized") {
       setAuth("unauthenticated")
-      setFormError("Invalid view key.")
+      setFormError(t("invalidViewKey"))
       setViewKey("")
       requestAnimationFrame(() => inputRef.current?.focus())
       return
     }
     if (res.code === "rate-limited") {
       setAuth("unauthenticated")
-      setFormError("Too many attempts. Try again later.")
+      setFormError(t("tooManyAttempts"))
       return
     }
     setAuth("unauthenticated")
-    setFormError(res.message)
+    setFormError(getApiErrorMessage(res.code, t))
   }
 
   // Unmount cleanup: abort any in-flight session/login request.
@@ -127,7 +130,7 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
         {...(initialPayload ? { initialPayload } : {})}
         onSessionExpired={() => {
           setAuth("expired")
-          setFormError("Session expired. Enter your view key again.")
+          setFormError(t("sessionExpired"))
         }}
         {...(onRangeChange ? { onRangeChange } : {})}
       />
@@ -137,7 +140,9 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
   const isExpired = auth === "expired"
   return (
     <form className="auth-form" onSubmit={onSubmit}>
-      <h1>Sign in</h1>
+      <div className="auth-form__wordmark">{t("accessControl")}</div>
+      <div className="auth-form__controls"><LanguageSwitch /></div>
+      <h1>{t("signIn")}</h1>
       {isExpired && (
         <div className="auth-form__expired" role="alert">
           {formError}
@@ -149,7 +154,7 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
         </div>
       )}
       <label className="auth-form__label" htmlFor="view-key-input">
-        View key
+        {t("viewKey")}
       </label>
       <input
         id="view-key-input"
@@ -161,7 +166,7 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
         autoComplete="current-password"
       />
       <button type="submit" className="btn-primary" disabled={auth === "submitting"}>
-        {auth === "submitting" ? "Signing in…" : "Sign in"}
+        {auth === "submitting" ? t("signingIn") : t("signIn")}
       </button>
     </form>
   )

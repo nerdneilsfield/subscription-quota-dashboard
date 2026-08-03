@@ -1,14 +1,18 @@
 import { BrowserRouter, Routes, Route, useSearchParams, useParams } from "react-router-dom"
 import type { RangeKey } from "../shared/domain"
 import { AuthGate } from "./components/AuthGate"
+import { LanguageSwitch } from "./components/LanguageSwitch"
+import { I18nProvider, useI18n } from "./i18n"
 
 const RANGE_KEYS: RangeKey[] = ["1h", "24h", "7d", "30d"]
 
 function NotFound() {
+  const { t } = useI18n()
   return (
     <div className="not-found">
-      <h1>Not found</h1>
-      <p>The page you requested does not exist.</p>
+      <div className="not-found__controls"><LanguageSwitch /></div>
+      <h1>{t("notFoundTitle")}</h1>
+      <p>{t("notFoundDescription")}</p>
     </div>
   )
 }
@@ -41,8 +45,10 @@ export function AppRoutes() {
 
 export function App() {
   return (
-    <BrowserRouter>
-      <AppRoutes />
-    </BrowserRouter>
+    <I18nProvider>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </I18nProvider>
   )
 }

@@ -1,7 +1,10 @@
+import { useI18n } from "../i18n"
+
 export function EmptyState() {
+  const { t } = useI18n()
   return (
     <div className="dashboard-empty">
-      <p>No subscriptions configured for this profile.</p>
+      <p>{t("noSubscriptions")}</p>
     </div>
   )
 }

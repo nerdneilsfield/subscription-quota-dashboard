@@ -1,4 +1,5 @@
 import type { RangeKey } from "../../shared/domain"
+import { useI18n } from "../i18n"
 
 interface RangeSwitchProps {
   ranges: RangeKey[]
@@ -8,8 +9,9 @@ interface RangeSwitchProps {
 }
 
 export function RangeSwitch({ ranges, selected, onSelect, loading }: RangeSwitchProps) {
+  const { t } = useI18n()
   return (
-    <div className="range-switch" role="group" aria-label="Select time range">
+    <div className="range-switch" role="group" aria-label={t("selectTimeRange")}>
       {ranges.map((r) => (
         <button
           key={r}

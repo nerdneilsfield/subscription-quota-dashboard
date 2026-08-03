@@ -1,10 +1,12 @@
 import type { DashboardMetric, DashboardSubscription } from "../../shared/dashboard-payload"
 import { formatNumber, formatPercentUsed } from "../format"
 import { TimeDisplay } from "./TimeDisplay"
-import { STATUS_LABEL } from "./MetricCard"
+import { getStatusLabel } from "./MetricCard"
 import { ProviderLogo } from "./ProviderLogo"
+import { useI18n } from "../i18n"
 
 export function UpstreamAccountCard({ subscription, now }: { subscription: DashboardSubscription; now: Date }) {
+  const { locale, t } = useI18n()
   const identity = subscription.identity!
   const updatedAt = subscription.lastRefreshAt
   return (
@@ -17,16 +19,16 @@ export function UpstreamAccountCard({ subscription, now }: { subscription: Dashb
               <h3>{identity.providerLabel}</h3>
               {identity.plan && <span className="upstream-card__plan">{identity.plan}</span>}
             </div>
-            <div className="upstream-card__account">{identity.account ?? `Account ${subscription.id.split(":").at(-1)?.slice(0, 8)}`}</div>
+            <div className="upstream-card__account">{identity.account ?? t("account", { id: subscription.id.split(":").at(-1)?.slice(0, 8) ?? "" })}</div>
           </div>
         </div>
         <div className="upstream-card__provenance">
-          {identity.transport && <span className="upstream-card__transport">via {identity.transport}</span>}
+          {identity.transport && <span className="upstream-card__transport">{t("via", { transport: identity.transport })}</span>}
           <span className={`status-badge status-${subscription.status}`} data-status={subscription.status}>
             <span className="status-badge__icon" aria-hidden="true">●</span>
-            <span className="status-badge__text">{STATUS_LABEL[subscription.status]}</span>
+            <span className="status-badge__text">{getStatusLabel(subscription.status, t)}</span>
           </span>
-          {updatedAt && <span className="upstream-card__updated">Updated <TimeDisplay iso={updatedAt} now={now} /></span>}
+          {updatedAt && <span className="upstream-card__updated">{t("updated")} <TimeDisplay iso={updatedAt} now={now} /></span>}
         </div>
       </header>
       <div className="upstream-card__metrics">
@@ -37,6 +39,7 @@ export function UpstreamAccountCard({ subscription, now }: { subscription: Dashb
 }
 
 function QuotaRow({ metric, now }: { metric: DashboardMetric; now: Date }) {
+  const { locale, t } = useI18n()
   if (metric.display.module === "manual-status-card") return <StatusRow metric={metric} />
   const used = metric.used
   const percent = metric.percentUsed ?? (metric.limit && used !== undefined ? (used / metric.limit) * 100 : undefined)
@@ -52,25 +55,25 @@ function QuotaRow({ metric, now }: { metric: DashboardMetric; now: Date }) {
         <div>
           <h4>{metric.label}</h4>
           <div className="quota-row__window">
-            {metric.window?.duration && <span>Window {metric.window.duration}</span>}
+            {metric.window?.duration && <span>{t("window")} {metric.window.duration}</span>}
             {metric.window?.label && !metric.window.duration && <span>{metric.window.label}</span>}
           </div>
         </div>
         <div className="quota-row__headline">
           <strong>{remainingPercent !== undefined ? formatPercentUsed(remainingPercent, false) : "—"}</strong>
-          <span>remaining</span>
+          <span>{t("remaining")}</span>
         </div>
       </div>
       {remainingPercent !== undefined && (
-        <div className="progress quota-row__progress" role="progressbar" aria-label={`${metric.label} remaining`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} data-status={metric.status}>
+        <div className="progress quota-row__progress" role="progressbar" aria-label={t("metricRemainingAria", { label: metric.label })} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)} data-status={metric.status}>
           <div className="progress__fill" style={{ width: `${progress}%` }} />
         </div>
       )}
       <dl className="quota-row__facts">
-        <div><dt>{monetary ? "Balance" : "Remaining"}</dt><dd>{monetary && remaining !== undefined && metric.limit !== undefined ? `${formatMetricValue(remaining, metric.unit)} / ${formatMetricValue(metric.limit, metric.unit)}` : remaining !== undefined ? formatMetricValue(remaining, metric.unit) : "—"}</dd></div>
-        <div><dt>Used</dt><dd>{used !== undefined ? formatMetricValue(used, metric.unit) : "—"}</dd></div>
-        <div><dt>Reset</dt><dd>{metric.window?.resetAt ? <><span>{formatReset(metric.window.resetAt)}</span><TimeDisplay iso={metric.window.resetAt} now={now} /></> : "Not reported"}</dd></div>
-        <div><dt>Status</dt><dd className={`status-${metric.status}`}>{STATUS_LABEL[metric.status]}</dd></div>
+        <div><dt>{monetary ? t("balance") : t("remaining")}</dt><dd>{monetary && remaining !== undefined && metric.limit !== undefined ? `${formatMetricValue(remaining, metric.unit, locale)} / ${formatMetricValue(metric.limit, metric.unit, locale)}` : remaining !== undefined ? formatMetricValue(remaining, metric.unit, locale) : "—"}</dd></div>
+        <div><dt>{t("used")}</dt><dd>{used !== undefined ? formatMetricValue(used, metric.unit, locale) : "—"}</dd></div>
+        <div><dt>{t("reset")}</dt><dd>{metric.window?.resetAt ? <><span>{formatReset(metric.window.resetAt, locale)}</span><TimeDisplay iso={metric.window.resetAt} now={now} /></> : t("notReported")}</dd></div>
+        <div><dt>{t("status")}</dt><dd className={`status-${metric.status}`}>{getStatusLabel(metric.status, t)}</dd></div>
       </dl>
       {metric.display.notes && <p className="quota-row__notes">{metric.display.notes}</p>}
     </article>
@@ -78,27 +81,28 @@ function QuotaRow({ metric, now }: { metric: DashboardMetric; now: Date }) {
 }
 
 function StatusRow({ metric }: { metric: DashboardMetric }) {
+  const { t } = useI18n()
   return (
     <article className="quota-row quota-row--status" data-metric={metric.id} data-status={metric.status}>
       <div className="quota-row__heading">
         <div><h4>{metric.label}</h4></div>
         <div className="quota-row__headline quota-row__headline--status">
-          <strong>{metric.display.notes ?? STATUS_LABEL[metric.status]}</strong>
+          <strong>{metric.display.notes ?? getStatusLabel(metric.status, t)}</strong>
         </div>
       </div>
     </article>
   )
 }
 
-function formatMetricValue(value: number, unit: string): string {
+function formatMetricValue(value: number, unit: string, locale: "en" | "zh-CN"): string {
   if (unit === "$") return `$${value.toFixed(2)}`
-  return `${formatNumber(value)}${unit}`
+  return `${formatNumber(value, locale)}${unit}`
 }
 
-function formatReset(iso: string): string {
+function formatReset(iso: string, locale: "en" | "zh-CN"): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en-US", {
     month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
   }).format(date)
 }

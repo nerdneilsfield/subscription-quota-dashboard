@@ -2,6 +2,8 @@ import type { DashboardSubscription, DashboardSubscriptionError } from "../../sh
 import { MetricCard } from "./MetricCard"
 import { UpstreamAccountCard } from "./UpstreamAccountCard"
 import { ProviderLogo } from "./ProviderLogo"
+import { getStatusLabel } from "./MetricCard"
+import { useI18n } from "../i18n"
 
 interface SubscriptionCardProps {
   subscription: DashboardSubscription
@@ -9,6 +11,7 @@ interface SubscriptionCardProps {
 }
 
 export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
+  const { t } = useI18n()
   const unavailable = subscription.status === "unavailable"
   const stale = subscription.status === "stale"
   const hasMetrics = subscription.metrics.length > 0
@@ -26,7 +29,7 @@ export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
         </div>
         <span className={`status-badge status-${subscription.status}`} data-status={subscription.status}>
           <span className="status-badge__icon" aria-hidden="true">{ICON[subscription.status]}</span>
-          <span className="status-badge__text">{LABEL[subscription.status]}</span>
+          <span className="status-badge__text">{getStatusLabel(subscription.status, t)}</span>
         </span>
       </header>
       {subscription.errors?.map((err, i) => <ErrorBanner key={i} error={err} stale={stale} />)}
@@ -39,7 +42,7 @@ export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
       )}
       {!hasMetrics && unavailable && (
         <div className="subscription-card__unavailable">
-          {subscription.errors?.[0]?.message ?? "This subscription is currently unavailable."}
+          {subscription.errors?.[0]?.message ?? t("subscriptionUnavailable")}
         </div>
       )}</>}
       {isUpstreamAccount && subscription.errors?.map((err, i) => <ErrorBanner key={i} error={err} stale={stale} />)}
@@ -57,14 +60,6 @@ function ErrorBanner({ error, stale }: { error: DashboardSubscriptionError; stal
   )
 }
 
-const LABEL: Record<string, string> = {
-  ok: "OK",
-  warn: "Warning",
-  critical: "Critical",
-  stale: "Stale",
-  unavailable: "Unavailable",
-  expired: "Expired",
-}
 const ICON: Record<string, string> = {
   ok: "●",
   warn: "▲",

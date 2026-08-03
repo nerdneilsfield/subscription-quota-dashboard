@@ -4,10 +4,13 @@
 //  - formatPercentUsed: Math.round; overflow shows ">100%".
 //  - formatRelativeTime: human buckets relative to `now`.
 
-export function formatNumber(value: number): string {
+import { formatRelativeTimeText, getTranslator, type Locale } from "./i18n"
+
+export function formatNumber(value: number, locale: Locale = "en"): string {
   if (value < 1000) return String(Math.round(value))
-  if (value < 1_000_000) return Math.round(value).toLocaleString()
-  return value.toLocaleString(undefined, {
+  const intlLocale = locale === "zh-CN" ? "zh-CN" : "en-US"
+  if (value < 1_000_000) return Math.round(value).toLocaleString(intlLocale)
+  return value.toLocaleString(intlLocale, {
     notation: "compact",
     maximumFractionDigits: 1,
   })
@@ -22,25 +25,6 @@ export function formatPercentUsed(percent: number, overflow: boolean): string {
   return `${Math.round(percent)}%`
 }
 
-export function formatRelativeTime(iso: string, now: Date): string {
-  const target = new Date(iso).getTime()
-  const diffMs = target - now.getTime()
-  const abs = Math.abs(diffMs)
-  const secs = abs / 1000
-  const mins = secs / 60
-  const hours = mins / 60
-  const days = hours / 24
-  const future = diffMs >= 0
-  const fmt = (qty: number, unit: string): string => {
-    const q = Math.max(1, Math.round(qty))
-    return future ? `in ${q}${unit}` : `${q}${unit} ago`
-  }
-  if (secs < 60) {
-    // Zero diff means "just now", not "in 1s"
-    if (abs < 500) return "just now"
-    return fmt(secs, "s")
-  }
-  if (mins < 60) return fmt(mins, "m")
-  if (hours < 24) return fmt(hours, "h")
-  return fmt(days, "d")
+export function formatRelativeTime(iso: string, now: Date, locale: Locale = "en"): string {
+  return formatRelativeTimeText(iso, now, getTranslator(locale))
 }

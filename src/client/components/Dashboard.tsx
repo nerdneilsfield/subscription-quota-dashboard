@@ -13,6 +13,8 @@ import { SummaryRow } from "./SummaryRow"
 import { SubscriptionCard } from "./SubscriptionCard"
 import { RangeSwitch } from "./RangeSwitch"
 import { TimeDisplay } from "./TimeDisplay"
+import { LanguageSwitch } from "./LanguageSwitch"
+import { getApiErrorMessage, useI18n } from "../i18n"
 
 const VISIBILITY_REFETCH_MS = 5 * 60 * 1000
 
@@ -33,6 +35,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ profileId, range, initialPayload, onSessionExpired, onRangeChange }: DashboardProps) {
+  const { t } = useI18n()
   // Validate initialPayload identity BEFORE useState init to prevent
   // a one-frame flash of stale range/profile data.
   const validInitialPayload = initialPayload
@@ -215,8 +218,8 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
     if (!payload) return
     const unavailable =
       payload.subscriptions.length > 0 && payload.subscriptions.every((s) => s.status === "unavailable")
-    document.title = `${unavailable ? "! " : ""}${payload.profile.name} · Quota Dashboard`
-  }, [payload])
+    document.title = `${unavailable ? "! " : ""}${payload.profile.name} · ${t("quotaDashboard")}`
+  }, [payload, t])
 
   const retry = useCallback(() => {
     void fetchRange(range, "initial")
@@ -224,7 +227,7 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
 
   if (phase === "loading") return <LoadingState />
   if (phase === "error" || !payload) {
-    return <NetworkError message={error?.message ?? "Could not load dashboard."} onRetry={retry} />
+    return <NetworkError message={error ? getApiErrorMessage(error.code, t) : t("couldNotLoadDashboard")} onRetry={retry} />
   }
 
   const unavailable = payload.subscriptions.length > 0 && payload.subscriptions.every((s) => s.status === "unavailable")
@@ -239,16 +242,17 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
     <div className="dashboard" data-system-status={attentionCount > 0 ? "attention" : "nominal"}>
       <header className="dashboard__header">
         <div className="dashboard__identity">
-          <span className="dashboard__wordmark">SQD / QUOTA OPERATIONS</span>
+          <span className="dashboard__wordmark">{t("wordmark")}</span>
           <div className="dashboard__title">
             <h1>{payload.profile.name}</h1>
             <span className={`system-state${attentionCount > 0 ? " system-state--attention" : ""}`}>
               <span aria-hidden="true">●</span>
-              {attentionCount > 0 ? "ATTENTION" : "NOMINAL"}
+              {attentionCount > 0 ? t("attention") : t("nominal")}
             </span>
           </div>
         </div>
         <div className="dashboard__controls">
+          <LanguageSwitch />
           <button
             type="button"
             className="btn-refresh"
@@ -261,11 +265,11 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
           </button>
         </div>
         <dl className="dashboard__telemetry">
-          <div><dt>Accounts</dt><dd>{payload.subscriptions.length}</dd></div>
-          <div><dt>Upstreams</dt><dd>{upstreamSubscriptions.length}</dd></div>
-          <div><dt>Metrics</dt><dd>{metricCount}</dd></div>
-          <div><dt>Healthy</dt><dd>{healthyCount}</dd></div>
-          <div><dt>Attention</dt><dd data-attention={attentionCount > 0}>{attentionCount}</dd></div>
+          <div><dt>{t("accounts")}</dt><dd>{payload.subscriptions.length}</dd></div>
+          <div><dt>{t("upstreams")}</dt><dd>{upstreamSubscriptions.length}</dd></div>
+          <div><dt>{t("metrics")}</dt><dd>{metricCount}</dd></div>
+          <div><dt>{t("healthy")}</dt><dd>{healthyCount}</dd></div>
+          <div><dt>{t("attention")}</dt><dd data-attention={attentionCount > 0}>{attentionCount}</dd></div>
         </dl>
       </header>
 
@@ -277,15 +281,15 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
           loading={rangeLoading}
         />
         <p className="dashboard__meta">
-          {anyStale && <span className="header-warn" aria-label="stale data" title="Some data is stale">▲ STALE SOURCE</span>}
-          <span>SNAPSHOT </span>
+          {anyStale && <span className="header-warn" aria-label={t("staleData")} title={t("staleData")}>{t("staleSource")}</span>}
+          <span>{t("snapshot")} </span>
           <TimeDisplay iso={payload.generatedAt} now={now} />
         </p>
       </div>
 
       {unavailable && (
         <div className="dashboard-banner dashboard-banner--unavailable" role="alert">
-          All providers are currently unavailable.
+          {t("allProvidersUnavailable")}
         </div>
       )}
 
@@ -294,18 +298,18 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
       ) : (
         <main className="dashboard__body">
           {payload.summaryGroups.length > 0 && (
-            <section className="dashboard__summary" aria-label="Quota summary">
+            <section className="dashboard__summary" aria-label={t("quotaSummary")}>
               <div className="section-heading">
-                <div><span className="section-heading__index">01</span><h2>Resource telemetry</h2></div>
-                <p>{range} consumption window</p>
+                <div><span className="section-heading__index">01</span><h2>{t("resourceTelemetry")}</h2></div>
+                <p>{t("consumptionWindow", { range })}</p>
               </div>
               <SummaryRow groups={payload.summaryGroups} now={now} />
             </section>
           )}
           {upstreamSubscriptions.length > 0 && <section className="dashboard__subscriptions" aria-labelledby="upstream-heading">
             <div className="section-heading">
-              <div><span className="section-heading__index">02</span><h2 id="upstream-heading">Upstream accounts</h2></div>
-              <p>{upstreamSubscriptions.length} discovered via proxy</p>
+              <div><span className="section-heading__index">02</span><h2 id="upstream-heading">{t("upstreamAccounts")}</h2></div>
+              <p>{t("discoveredViaProxy", { count: upstreamSubscriptions.length })}</p>
             </div>
             <div className="subscriptions-grid subscriptions-grid--upstream">
               {upstreamSubscriptions.map((s) => (
@@ -315,8 +319,8 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
           </section>}
           {directSubscriptions.length > 0 && <section className="dashboard__subscriptions" aria-labelledby="direct-heading">
             <div className="section-heading">
-              <div><span className="section-heading__index">03</span><h2 id="direct-heading">Direct & manual</h2></div>
-              <p>{directSubscriptions.length} configured sources</p>
+              <div><span className="section-heading__index">03</span><h2 id="direct-heading">{t("directManual")}</h2></div>
+              <p>{t("configuredSources", { count: directSubscriptions.length })}</p>
             </div>
             <div className="subscriptions-grid subscriptions-grid--direct">
               {directSubscriptions.map((s) => (
@@ -330,8 +334,8 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
       <footer className="dashboard__footer">
         <p>
           <span>SQD / {payload.profile.id}</span>
-          <span>{range} RANGE</span>
-          <span>GENERATED <TimeDisplay iso={payload.generatedAt} now={now} /></span>
+          <span>{t("rangeLabel", { range })}</span>
+          <span>{t("generated")} <TimeDisplay iso={payload.generatedAt} now={now} /></span>
         </p>
       </footer>
     </div>
@@ -339,9 +343,10 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
 }
 
 function RefreshLabel({ state }: { state: RefreshState }) {
-  if (state.state === "refreshing") return <span>Refreshing…</span>
-  if (state.state === "updated") return <span>Updated</span>
-  if (state.state === "failed") return <span>Refresh failed</span>
-  if (state.state === "rate-limited") return <span>Retry in {state.retryAfter}s</span>
-  return <span>Refresh</span>
+  const { t } = useI18n()
+  if (state.state === "refreshing") return <span>{t("refreshing")}</span>
+  if (state.state === "updated") return <span>{t("refreshed")}</span>
+  if (state.state === "failed") return <span>{t("refreshFailed")}</span>
+  if (state.state === "rate-limited") return <span>{t("retryIn", { seconds: state.retryAfter })}</span>
+  return <span>{t("refresh")}</span>
 }

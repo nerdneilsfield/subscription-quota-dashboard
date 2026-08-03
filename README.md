@@ -154,3 +154,35 @@ Production defaults to newline-delimited JSON at `info` level. Set
 cookies, API keys, tokens, passwords, view keys, and session secrets are
 recursively replaced with `[REDACTED]`; response bodies and credentials are not
 logged.
+
+## OpenCode Go
+
+OpenCode Go reads the authenticated workspace page because OpenCode does not
+currently expose a documented personal quota API. Configure the workspace ID
+and the value of the `auth` cookie (the `Fe26...` token only):
+
+```env
+OPENCODE_WORKSPACE_ID=wrk_...
+OPENCODE_AUTH_COOKIE=Fe26...
+```
+
+The adapter extracts the real 5-hour, weekly, and monthly percentages and reset
+times from the server-rendered `lite.subscription.get` payload. It retries
+transient `429`/`5xx` failures and reports an explicit authentication error when
+the session expires. Treat this cookie like a password; keep it only in `.env`
+and replace it after logging out of OpenCode.
+
+## Xiaomi MiMo Token Plan
+
+MiMo Token Plan quota is read from the authenticated Subscription Management
+API. Copy the `Cookie` request-header value from the browser request to
+`/api/v1/tokenPlan/usage` into `.env`:
+
+```env
+MIMO_SESSION_COOKIE='api-platform_ph=...; api-platform_serviceToken=...; ...'
+```
+
+The adapter displays the real plan Credits usage, remaining progress, plan tier,
+expiry/reset, automatic-renewal state, MiMo Claw entitlement, and compensation
+Credits when present. Session cookies are redacted from logs and must never be
+committed.

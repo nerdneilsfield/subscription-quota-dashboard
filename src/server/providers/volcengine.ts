@@ -36,40 +36,53 @@ export function createVolcengineProvider(fetchImpl: typeof fetch = fetch): Provi
       const providerConfig = input.provider as VolcengineProvider
       const region = providerConfig.region ?? DEFAULT_REGION
       const now = new Date(input.now)
+      const wantsAgentPlan = input.metrics.some((metric) => metric.providerMetricId?.startsWith("afp:"))
+      const wantsCodingPlan = input.metrics.some((metric) => metric.providerMetricId?.startsWith("cp:"))
 
       // 1) GetAFPUsage
       const afpResult = await callOpenApi(fetchImpl, ak, sk, region, "GetAFPUsage", now)
+      let afpTiers: NormalizedMetric[] = []
       if ("body" in afpResult) {
-        const afpTiers = parseAfpTiers(afpResult.body, input.metrics)
+        afpTiers = parseAfpTiers(afpResult.body, input.metrics)
         if (afpTiers.length > 0) {
           const planType = extractPlanType(afpResult.body)
           const notes = planType ? `Agent Plan ${planType}` : undefined
           if (notes) for (const m of afpTiers) m.notes = notes
-          return { ...base, metrics: afpTiers }
         }
-        // AFP returned empty (no Agent Plan) -> fall through to CodingPlan
       }
-      // AFP soft/transient error -> collect and try CodingPlan as fallback
-      // (matches cc-switch: Soft errors are accumulated, not fatal)
       const afpError = "error" in afpResult ? afpResult.error : undefined
       // Auth failures are fatal; don't waste a CodingPlan call with bad credentials.
       if (afpError && !afpError.retryable) return { ...base, errors: [afpError] }
 
-      // 2) Fallback: GetCodingPlanUsage
-      const cpResult = await callOpenApi(fetchImpl, ak, sk, region, "GetCodingPlanUsage", now)
-      if ("body" in cpResult) {
-        const cpTiers = parseCodingPlanTiers(cpResult.body, input.metrics)
+      // 2) Coding Plan is an independent product. Query it whenever cp:* is
+      // configured, even if Agent Plan exists. Keep the legacy fallback when
+      // AFP is empty so older single-plan configurations still work.
+      let cpTiers: NormalizedMetric[] = []
+      let cpError: { message: string; retryable: boolean } | undefined
+      if (wantsCodingPlan || afpTiers.length === 0) {
+        const cpResult = await callOpenApi(fetchImpl, ak, sk, region, "GetCodingPlanUsage", now)
+        if ("body" in cpResult) cpTiers = parseCodingPlanTiers(cpResult.body, input.metrics)
+        else cpError = cpResult.error
         if (cpTiers.length > 0) {
           for (const m of cpTiers) m.notes = "Coding Plan"
-          return { ...base, metrics: cpTiers }
         }
       }
 
-      // Both calls failed or returned empty
-      const cpError = "error" in cpResult ? cpResult.error : undefined
-      // Auth errors from CodingPlan are fatal (non-retryable)
-      if (cpError && !cpError.retryable) return { ...base, errors: [cpError] }
-      // Prefer the first error if both are retryable; otherwise report both empty
+      // When both namespaces are configured, preserve both. If only cp:* is
+      // configured and Coding Plan returns nothing, AFP aliases remain a
+      // backward-compatible fallback for accounts served through AFP.
+      const metrics = [
+        ...(wantsAgentPlan || cpTiers.length === 0 ? afpTiers : []),
+        ...cpTiers,
+      ]
+      if (metrics.length > 0) {
+        const partialErrors = [
+          ...(wantsAgentPlan && afpError ? [afpError] : []),
+          ...(wantsCodingPlan && cpError ? [cpError] : []),
+        ]
+        return { ...base, metrics, ...(partialErrors.length > 0 ? { errors: partialErrors } : {}) }
+      }
+
       if (afpError) return { ...base, errors: [afpError] }
       if (cpError) return { ...base, errors: [cpError] }
       return { ...base, errors: [{ message: "Volcengine: no active Agent Plan or Coding Plan subscription found", retryable: false }] }
@@ -175,13 +188,14 @@ function parseAfpTiers(body: Record<string, unknown>, configs: MetricConfig[]): 
 }
 
 function makeAfpMetric(
-  providerMetricId: string,
+  afpProviderMetricId: string,
   label: string,
   quota: number,
   used: number,
   resetAt: string | undefined,
   configs: MetricConfig[],
 ): NormalizedMetric {
+  const providerMetricId = resolveVolcengineMetricId(afpProviderMetricId, configs)
   const cfg = configs.find((m) => m.providerMetricId === providerMetricId)
   const metric: NormalizedMetric = {
     providerMetricId,
@@ -195,6 +209,25 @@ function makeAfpMetric(
     ...(resetAt !== undefined ? { window: { kind: "rolling" as const, duration: durationForAfpWindow(providerMetricId), resetAt } } : {}),
   }
   return metric
+}
+
+/**
+ * GetAFPUsage and GetCodingPlanUsage expose the same quota windows under
+ * different metric namespaces. Prefer whichever namespace the subscription
+ * configured so an account migrating between the two control-plane shapes
+ * does not silently lose every metric during refresh filtering.
+ */
+function resolveVolcengineMetricId(afpProviderMetricId: string, configs: MetricConfig[]): string {
+  if (configs.some((metric) => metric.providerMetricId === afpProviderMetricId)) return afpProviderMetricId
+  const codingPlanAlias = AFP_TO_CODING_PLAN_METRIC[afpProviderMetricId]
+  if (codingPlanAlias && configs.some((metric) => metric.providerMetricId === codingPlanAlias)) return codingPlanAlias
+  return afpProviderMetricId
+}
+
+const AFP_TO_CODING_PLAN_METRIC: Record<string, string> = {
+  "afp:five_hour": "cp:five_hour",
+  "afp:weekly_limit": "cp:weekly_limit",
+  "afp:monthly": "cp:monthly",
 }
 
 function durationForAfpWindow(providerMetricId: string): string {

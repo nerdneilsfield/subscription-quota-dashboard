@@ -188,6 +188,7 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
         const fields = {
           durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
           metricCount: result.metrics.length,
+          metricIds: result.metrics.map((metric) => metric.providerMetricId),
           historyEventCount: result.historyEvents?.length ?? 0,
           dynamicSubscriptionCount: result.dynamicSubscriptions?.length ?? 0,
           errorCount: result.errors?.length ?? 0,
@@ -444,7 +445,12 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
       providerAccountId: paId,
       cacheStatus,
       returnedMetricCount: result.metrics.length,
+      returnedMetricIds: result.metrics.map((metric) => metric.providerMetricId),
       cachedMetricCount: normalizedForCache.length,
+      cachedMetricIds: normalizedForCache.map((metric) => metric.providerMetricId),
+      droppedMetricIds: result.metrics
+        .filter((metric) => !normalizedForCache.some((cached) => cached.providerMetricId === metric.providerMetricId))
+        .map((metric) => metric.providerMetricId),
       dynamicSubscriptionCount: dynamicSubsForCache?.length ?? 0,
       snapshotCount: snapshotRows.length,
       historyEventCount: historyRows.length,

@@ -141,6 +141,19 @@ Profiles, subscriptions, metrics, and providers are declared in:
 config/dashboard.config.ts
 ```
 
+The small header slogan above the profile name is optional and configurable:
+
+```ts
+const config: DashboardConfigInput = {
+  branding: { slogan: "SQD / 配额运营" },
+  // providers, subscriptions, profiles ...
+}
+```
+
+Omit `branding.slogan` to use the built-in localized Chinese/English slogan.
+The large profile title, such as `Personal`, remains controlled by
+`profiles[].name`.
+
 Provider API keys are referenced by environment-variable name (`apiKeyEnv`),
 **not** by literal value. The only exception is the manual provider, which has
 no secret. If you ever add a provider with a direct `apiKey` string (instead of

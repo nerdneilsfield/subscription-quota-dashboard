@@ -1,12 +1,13 @@
 # subscription-quota-dashboard
 
-Unified read-only dashboard for subscription quotas (Poe API, manual entries).
+Unified read-only dashboard for live subscription quotas.
 Bun + Hono server, React + Vite frontend, SQLite storage, signed session-cookie auth.
 
 ## Requirements
 
-- [Bun](https://bun.sh/) runtime.
-- A Poe API key (for the Poe provider). The manual provider needs nothing external.
+- [Bun](https://bun.sh/) runtime for local development.
+- Provider credentials for whichever live sources are enabled in
+  `config/dashboard.config.ts`.
 
 ## Quick start
 
@@ -37,6 +38,80 @@ NODE_ENV=production bun run start
 #    process on :3000 handles both UI and API)
 ```
 
+## Container deployment
+
+The production image uses pinned `oven/bun:1.3.14-alpine` build and runtime
+stages. It runs as the non-root `bun` user, listens on `0.0.0.0:3000`, serves
+the compiled SPA and API from one process, writes JSON logs, and stores SQLite
+state under `/app/data`. Credentials are supplied only at runtime; `.env` files
+are excluded from the build context.
+
+Create a deployment environment file from `.env.example`. At minimum, set:
+
+```env
+SELF_DASHBOARD_VIEW_KEY=replace-with-a-random-128-bit-value
+SESSION_SECRET=replace-with-a-random-256-bit-value
+PUBLIC_ORIGIN=https://dashboard.example.com
+```
+
+Add credentials for each enabled provider. Do not commit this file. When using
+an env-file with a container runtime, keep values as literal `KEY=value` lines;
+do not use shell `export` statements.
+
+### Apple Container (validated)
+
+Apple's official `container` runtime is the primary local deployment path and
+has been verified on Apple Silicon with a native `linux/arm64` image:
+
+```bash
+container system start
+container build --progress plain \
+  -t subscription-quota-dashboard:latest .
+
+container volume create subscription-quota-data
+container run --name subscription-quota-dashboard --detach \
+  --publish 127.0.0.1:3000:3000 \
+  --env-file .env.container \
+  --volume subscription-quota-data:/app/data \
+  subscription-quota-dashboard:latest
+
+curl --fail http://127.0.0.1:3000/health
+container logs subscription-quota-dashboard
+```
+
+Expected health response:
+
+```json
+{"ok":true}
+```
+
+Stop and remove the deployment with:
+
+```bash
+container stop subscription-quota-dashboard
+container delete subscription-quota-dashboard
+```
+
+### Docker or Lima fallback
+
+The same Dockerfile remains OCI/Docker compatible:
+
+```bash
+docker build -t subscription-quota-dashboard:latest .
+docker volume create subscription-quota-data
+docker run --detach \
+  --name subscription-quota-dashboard \
+  --restart unless-stopped \
+  --publish 127.0.0.1:3000:3000 \
+  --env-file .env.container \
+  --volume subscription-quota-data:/app/data \
+  subscription-quota-dashboard:latest
+```
+
+If Apple Container is unavailable, start a Lima Docker VM and run the same
+Docker commands inside it. The image contains a `/health` health check and
+declares port `3000` plus the `/app/data` volume.
+
 ## Environment variables
 
 | Variable                    | Purpose                                                                 |
@@ -45,6 +120,10 @@ NODE_ENV=production bun run start
 | `SELF_DASHBOARD_VIEW_KEY`   | 128-bit random string used as the login view key for the `self` profile. |
 | `SESSION_SECRET`            | 256-bit random secret used to sign session cookies. Required.            |
 | `PORT`                      | Server port. Defaults to `3000`.                                         |
+| `HOST`                      | Listen address. Defaults to `127.0.0.1`; image defaults to `0.0.0.0`.    |
+| `PUBLIC_ORIGIN`             | Browser-facing HTTP(S) origin; required behind an HTTPS reverse proxy.   |
+| `CONFIG_PATH`               | Dashboard config path; image defaults to `/app/config/dashboard.config.ts`. |
+| `DASHBOARD_DB`              | SQLite path; image defaults to `/app/data/dashboard.db`.                 |
 | `LOG_LEVEL`                 | `debug`, `info`, `warn`, `error`, or `silent`; defaults to `debug` in development and `info` in production. |
 | `LOG_FORMAT`                | `pretty` for readable local logs or `json` for structured production ingestion. |
 

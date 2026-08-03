@@ -1,6 +1,8 @@
 import type { DashboardConfigInput } from "../src/shared/domain"
 
 const config: DashboardConfigInput = {
+  // Optional: overrides the localized header slogan above the profile name.
+  // branding: { slogan: "SQD / 配额运营" },
   providers: [
     {
       id: "poe-main",

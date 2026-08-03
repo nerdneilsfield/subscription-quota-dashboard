@@ -65,8 +65,12 @@ export type SubscriptionConfig = {
   ui?: { color?: string; group?: string; sort?: number }
 }
 
+export type DashboardBrandingConfig = {
+  slogan?: string
+}
+
 export type ProfileConfig = { id: string; name: string; viewKey: string | undefined; subscriptionIds: string[]; dynamicProviderIds?: string[] }
-export type DashboardConfigInput = { providers: ProviderAccountConfig[]; subscriptions: SubscriptionConfig[]; profiles: ProfileConfig[] }
+export type DashboardConfigInput = { providers: ProviderAccountConfig[]; subscriptions: SubscriptionConfig[]; profiles: ProfileConfig[]; branding?: DashboardBrandingConfig }
 export type ProviderRuntimeState = {
   available: boolean
   apiKey?: string
@@ -90,4 +94,4 @@ export type SubscriptionIdentity = {
   plan?: string
   transport?: string
 }
-export type NormalizedConfig = { providers: Map<string, ProviderAccountConfig>; providerRuntime: Map<string, ProviderRuntimeState>; subscriptions: Map<string, SubscriptionConfig>; profiles: Map<string, ProfileConfig> }
+export type NormalizedConfig = { providers: Map<string, ProviderAccountConfig>; providerRuntime: Map<string, ProviderRuntimeState>; subscriptions: Map<string, SubscriptionConfig>; profiles: Map<string, ProfileConfig>; branding?: DashboardBrandingConfig }

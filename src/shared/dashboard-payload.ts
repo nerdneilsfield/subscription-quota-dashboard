@@ -6,6 +6,7 @@
 
 import type {
   CalendarAnchor,
+  DashboardBrandingConfig,
   DisplayModule,
   MetricStatus,
   MetricThresholds,
@@ -102,6 +103,7 @@ export type SummaryGroup = {
 
 export type DashboardPayload = {
   profile: { id: string; name: string }
+  branding?: DashboardBrandingConfig
   generatedAt: string
   ranges: RangeKey[]
   selectedRange: RangeKey

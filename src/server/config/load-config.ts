@@ -1,6 +1,7 @@
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import type {
+  DashboardBrandingConfig,
   DashboardConfigInput,
   LimitWindow,
   MetricConfig,
@@ -279,7 +280,15 @@ function inferSourceValueKind(metric: MetricConfig): SourceValueKind {
   return "status"
 }
 
+function validateBranding(branding: DashboardBrandingConfig | undefined): void {
+  const slogan = branding?.slogan
+  if (slogan !== undefined && (typeof slogan !== "string" || slogan.trim() === "")) {
+    fail("branding.slogan", "must be a non-empty string")
+  }
+}
+
 export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConfig {
+  validateBranding(input.branding)
   const providers = new Map<string, ProviderAccountConfig>()
   const providerRuntime = new Map<string, ProviderRuntimeState>()
 
@@ -440,7 +449,7 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
     profiles.set(profile.id, profile)
   }
 
-  return { providers, providerRuntime, subscriptions, profiles }
+  return { providers, providerRuntime, subscriptions, profiles, ...(input.branding ? { branding: input.branding } : {}) }
 }
 
 export async function loadDashboardConfigFromFile(

@@ -242,7 +242,7 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
     <div className="dashboard" data-system-status={attentionCount > 0 ? "attention" : "nominal"}>
       <header className="dashboard__header">
         <div className="dashboard__identity">
-          <span className="dashboard__wordmark">{t("wordmark")}</span>
+          <span className="dashboard__wordmark">{payload.branding?.slogan ?? t("wordmark")}</span>
           <div className="dashboard__title">
             <h1>{payload.profile.name}</h1>
             <span className={`system-state${attentionCount > 0 ? " system-state--attention" : ""}`}>

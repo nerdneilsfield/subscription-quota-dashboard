@@ -1,5 +1,7 @@
 # subscription-quota-dashboard
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Unified read-only dashboard for live subscription quotas.
 Bun + Hono server, React + Vite frontend, SQLite storage, signed session-cookie auth.
 
@@ -165,6 +167,7 @@ no secret. If you ever add a provider with a direct `apiKey` string (instead of
   reverse proxy, upgrades, rollback, backups, and troubleshooting.
 - [Multi-profile guide](docs/multi-profile.md) — separate profile URLs,
   keys, subscription visibility, session behavior, and rotation.
+- 中文：[部署指南](docs/deployment.zh-CN.md) · [多 Profile 指南](docs/multi-profile.zh-CN.md)
 
 GitHub Actions publishes multi-architecture images to
 `ghcr.io/nerdneilsfield/subscription-quota-dashboard` on semantic-version tags

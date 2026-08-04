@@ -1,5 +1,7 @@
 # Deployment Guide
 
+[English](deployment.md) | [简体中文](deployment.zh-CN.md)
+
 This guide deploys the image published by GitHub Actions to:
 
 ```text

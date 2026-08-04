@@ -1,5 +1,7 @@
 # Multi-profile Guide
 
+[English](multi-profile.md) | [简体中文](multi-profile.zh-CN.md)
+
 Profiles provide separate dashboard views and separate login keys within one
 server. The server can share provider accounts and subscriptions, while each
 profile chooses which subscriptions it exposes.

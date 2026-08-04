@@ -159,6 +159,17 @@ Provider API keys are referenced by environment-variable name (`apiKeyEnv`),
 no secret. If you ever add a provider with a direct `apiKey` string (instead of
 `apiKeyEnv`), treat that config file as personal-local and **never commit it**.
 
+## Guides
+
+- [Deployment guide](docs/deployment.md) — GHCR, Docker, Apple Container,
+  reverse proxy, upgrades, rollback, backups, and troubleshooting.
+- [Multi-profile guide](docs/multi-profile.md) — separate profile URLs,
+  keys, subscription visibility, session behavior, and rotation.
+
+GitHub Actions publishes multi-architecture images to
+`ghcr.io/nerdneilsfield/subscription-quota-dashboard` on pushes to `master` and
+semantic-version tags such as `v1.2.3`.
+
 ## Data storage
 
 Metrics snapshots and refresh state are persisted to SQLite at:

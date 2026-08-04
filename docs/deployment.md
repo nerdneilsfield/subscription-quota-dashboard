@@ -43,6 +43,16 @@ all existing profile sessions.
 
 ## 2. Pull and run the GHCR image
 
+Create a release tag to publish an image:
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+The workflow intentionally runs only for `v*.*.*` tags. Ordinary `master`
+pushes and manual workflow dispatches do not publish images.
+
 Public packages can be pulled without login. For a private package, create a
 GitHub token with `read:packages` and log in:
 
@@ -51,10 +61,10 @@ printf '%s' "$GHCR_READ_TOKEN" \
   | docker login ghcr.io -u nerdneilsfield --password-stdin
 ```
 
-Run the latest image:
+Run a released image (pin the version in production):
 
 ```bash
-export IMAGE=ghcr.io/nerdneilsfield/subscription-quota-dashboard:latest
+export IMAGE=ghcr.io/nerdneilsfield/subscription-quota-dashboard:v1.2.3
 
 docker pull "$IMAGE"
 docker volume create subscription-quota-data
@@ -129,8 +139,9 @@ See [multi-profile.md](./multi-profile.md) for profile configuration.
 
 ## 5. Upgrade and rollback
 
-The workflow publishes `latest`, the `master` branch tag, commit SHA tags, and
-semantic-version tags for releases such as `v1.2.3`.
+The workflow runs only for version tags such as `v1.2.3`. Each release updates
+`latest`, the original `v1.2.3` tag, normalized semantic-version tags, and a
+commit SHA tag. No `master` push publishes an image.
 
 Upgrade while keeping SQLite data:
 

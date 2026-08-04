@@ -167,8 +167,8 @@ no secret. If you ever add a provider with a direct `apiKey` string (instead of
   keys, subscription visibility, session behavior, and rotation.
 
 GitHub Actions publishes multi-architecture images to
-`ghcr.io/nerdneilsfield/subscription-quota-dashboard` on pushes to `master` and
-semantic-version tags such as `v1.2.3`.
+`ghcr.io/nerdneilsfield/subscription-quota-dashboard` on semantic-version tags
+only, such as `v1.2.3`; ordinary `master` pushes do not publish images.
 
 ## Data storage
 

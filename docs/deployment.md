@@ -50,8 +50,9 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 
-The workflow intentionally runs only for `v*.*.*` tags. Ordinary `master`
-pushes and manual workflow dispatches do not publish images.
+Automatic publishing intentionally runs only for `v*.*.*` tags. Ordinary
+`master` pushes do not publish images; manual workflow dispatch remains
+available when an explicit build is needed.
 
 Public packages can be pulled without login. For a private package, create a
 GitHub token with `read:packages` and log in:
@@ -141,7 +142,8 @@ See [multi-profile.md](./multi-profile.md) for profile configuration.
 
 The workflow runs only for version tags such as `v1.2.3`. Each release updates
 `latest`, the original `v1.2.3` tag, normalized semantic-version tags, and a
-commit SHA tag. No `master` push publishes an image.
+commit SHA tag. No `master` push publishes an image; manual dispatch is still
+available.
 
 Upgrade while keeping SQLite data:
 

@@ -151,7 +151,9 @@ Provider API key 应通过环境变量名 `apiKeyEnv` 引用，**不要写字面
 
 - [部署指南](docs/deployment.zh-CN.md)：GHCR、Docker、Apple Container、反代、升级、回滚、备份、排障。
 - [多 Profile 指南](docs/multi-profile.zh-CN.md)：Profile URL、key、可见 subscription、session、轮换。
+- [第三方声明](THIRD_PARTY_NOTICES.zh-CN.md)：源码归属、provider 集成限制与品牌资源说明。
 - English: [Deployment guide](docs/deployment.md) · [Multi-profile guide](docs/multi-profile.md)
+  · [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 GitHub Actions 仅在 semantic-version tag（例如 `v1.2.3`）自动发布多架构镜像到：
 

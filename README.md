@@ -167,7 +167,10 @@ no secret. If you ever add a provider with a direct `apiKey` string (instead of
   reverse proxy, upgrades, rollback, backups, and troubleshooting.
 - [Multi-profile guide](docs/multi-profile.md) — separate profile URLs,
   keys, subscription visibility, session behavior, and rotation.
+- [Third-party notices](THIRD_PARTY_NOTICES.md) — source attributions,
+  provider integration caveats, and brand assets.
 - 中文：[部署指南](docs/deployment.zh-CN.md) · [多 Profile 指南](docs/multi-profile.zh-CN.md)
+  · [第三方声明](THIRD_PARTY_NOTICES.zh-CN.md)
 
 GitHub Actions publishes multi-architecture images to
 `ghcr.io/nerdneilsfield/subscription-quota-dashboard` on semantic-version tags

@@ -204,6 +204,27 @@ test("POST /api/session/self accepts Authorization: Bearer without a request bod
   expect(res.headers.get("set-cookie")).toContain("sqd_session_self=")
 })
 
+test("POST /api/session/self/logout clears the profile cookie", async () => {
+  const app = createApp(makeDeps())
+  const res = await app.request("/api/session/self/logout", {
+    method: "POST",
+    headers: { Origin: ALLOWED_ORIGIN },
+  })
+  expect(res.status).toBe(200)
+  const cookie = res.headers.get("set-cookie") ?? ""
+  expect(cookie).toContain("sqd_session_self=;")
+  expect(cookie).toContain("Max-Age=0")
+})
+
+test("POST /api/session/self/logout rejects cross-origin requests", async () => {
+  const app = createApp(makeDeps())
+  const res = await app.request("/api/session/self/logout", {
+    method: "POST",
+    headers: { Origin: "http://evil.example" },
+  })
+  expect(res.status).toBe(403)
+})
+
 // --- Route: GET /api/dashboard/:profileId ---
 
 test("GET /api/dashboard/self with a viewKey query parameter returns 401", async () => {
@@ -223,8 +244,9 @@ test("GET /api/dashboard/self with cookie returns profile payload", async () => 
   const cookie = extractCookie(session.headers.get("set-cookie")!)
   const res = await app.request("/api/dashboard/self", { headers: { Cookie: cookie } })
   expect(res.status).toBe(200)
-  const body = await res.json() as { profile: { id: string } }
+  const body = await res.json() as { profile: { id: string }; profiles: Array<{ id: string }> }
   expect(body.profile.id).toBe("self")
+  expect(body.profiles.map((profile) => profile.id)).toEqual(["self"])
 })
 
 test("GET /api/dashboard/self accepts Authorization: Bearer without query secrets", async () => {

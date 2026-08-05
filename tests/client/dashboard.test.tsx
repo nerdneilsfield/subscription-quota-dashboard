@@ -15,6 +15,7 @@ const PAST_3H = "2026-06-25T09:00:00.000Z"
 function richPayload(): DashboardPayload {
   return {
     profile: { id: "self", name: "Personal" },
+    profiles: [{ id: "self", name: "Personal" }, { id: "team", name: "Team" }],
     generatedAt: NOW_ISO,
     ranges: ["1h", "24h", "7d", "30d"],
     selectedRange: "24h",
@@ -208,7 +209,7 @@ function queryByText(substring: string) {
 
 test("renders profile name, API points, Rolling 5h label, critical, range buttons", async () => {
   await loadDashboard()
-  expect(screen().getByText("Personal")).toBeTruthy()
+  expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy()
   expect(screen().getByText("API points")).toBeTruthy()
   expect(screen().getByText("Rolling 5h")).toBeTruthy()
   for (const r of ["1h", "24h", "7d", "30d"]) {
@@ -390,11 +391,31 @@ test("direct visit with valid cookie calls getDashboard once and skips the view-
   installApi({ dashboard: () => { getCount++; return { status: 200, body: richPayload() } } })
   renderApp("/d/self")
   await waitFor(() => expect(getCount).toBe(1))
-  expect(screen().getByText("Personal")).toBeTruthy()
+  expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy()
   expect(screen().queryByLabelText(/view key/i)).toBeNull()
   // no second fetch after settling
   await new Promise((r) => setTimeout(r, 20))
   expect(getCount).toBe(1)
+})
+
+test("profile selector navigates to the selected profile route", async () => {
+  installApi({ dashboard: () => ({ status: 200, body: richPayload() }) })
+  renderApp("/d/self")
+  await waitFor(() => expect(screen().getByLabelText("Switch profile")).toBeTruthy())
+  fireEvent.change(screen().getByLabelText("Switch profile"), { target: { value: "team" } })
+  await waitFor(() => expect(calls.some((call) => call.url.includes("/api/dashboard/team"))).toBe(true))
+})
+
+test("change key clears current profile session and returns to view-key form", async () => {
+  installApi({
+    dashboard: () => ({ status: 200, body: richPayload() }),
+    session: () => ({ status: 200, body: { ok: true } }),
+  })
+  renderApp("/d/self")
+  await waitFor(() => expect(screen().getByRole("button", { name: "Change key" })).toBeTruthy())
+  fireEvent.click(screen().getByRole("button", { name: "Change key" }))
+  await waitFor(() => expect(screen().getByLabelText(/view key/i)).toBeTruthy())
+  expect(calls.some((call) => call.method === "POST" && call.url.endsWith("/api/session/self/logout"))).toBe(true)
 })
 
 test("direct visit with no cookie (401) shows the unauthenticated view-key form", async () => {
@@ -491,7 +512,7 @@ test("API 401 after authenticated load transitions to expired, preserves range=7
     refresh: () => ({ status: 401, body: { error: "unauthorized" } }),
   })
   renderApp("/d/self?range=7d")
-  await waitFor(() => expect(screen().getByText("Personal")).toBeTruthy())
+  await waitFor(() => expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy())
   // a refresh that returns 401 -> expired (URL range untouched)
   fireEvent.click(screen().getByRole("button", { name: /refresh/i }))
   await flush()
@@ -544,7 +565,7 @@ test("initial fetch renders a full-page skeleton", async () => {
   renderApp("/d/self")
   await waitFor(() => expect(document.querySelector("[data-skeleton]")).toBeTruthy())
   release()
-  await waitFor(() => expect(screen().getByText("Personal")).toBeTruthy())
+  await waitFor(() => expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy())
 })
 
 test("empty profile renders empty state copy", async () => {
@@ -684,7 +705,7 @@ test("range switch updates query string, calls getDashboard, keeps shell with ra
   await waitFor(() => expect(screen().getByRole("button", { name: "7d" }).getAttribute("aria-pressed")).toBe("true"))
   await waitFor(() => expect(calls.some((c) => c.url.includes("range=7d"))).toBe(true))
   // shell stays visible (header still present)
-  expect(screen().getByText("Personal")).toBeTruthy()
+  expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy()
   // range-stat skeleton appears while loading (may flicker due to gen guard;
   // use findAllQueries to tolerate timing).
   await waitFor(() => {
@@ -716,7 +737,7 @@ test("stale aborted range response does not overwrite newer range state", async 
     },
   })
   renderApp("/d/self")
-  await waitFor(() => expect(screen().getByText("Personal")).toBeTruthy())
+  await waitFor(() => expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy())
   fireEvent.click(screen().getByRole("button", { name: "1h" })) // slow pending
   fireEvent.click(screen().getByRole("button", { name: "7d" })) // aborts 1h
   await flush()
@@ -741,7 +762,7 @@ test("visibility return after 5 minutes hidden triggers a refetch", async () => 
   try {
     installApi({ dashboard: () => { dashCall++; return { status: 200, body: dashCall === 1 ? v1 : v2 } } })
     renderApp("/d/self")
-    await waitFor(() => expect(screen().getByText("Personal")).toBeTruthy())
+    await waitFor(() => expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy())
     const callsBefore = dashCall
     // hide tab
     Object.defineProperty(document, "hidden", { value: true, configurable: true })
@@ -767,7 +788,7 @@ test("visibility return within 5 minutes does not refetch", async () => {
   try {
     installApi({ dashboard: () => { dashCall++; return { status: 200, body: richPayload() } } })
     renderApp("/d/self")
-    await waitFor(() => expect(screen().getByText("Personal")).toBeTruthy())
+    await waitFor(() => expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy())
     const before = dashCall
     Object.defineProperty(document, "hidden", { value: true, configurable: true })
     document.dispatchEvent(new Event("visibilitychange"))

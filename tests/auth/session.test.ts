@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ProfileConfig } from "../../src/shared/domain"
 import {
+  clearSessionCookie,
   createSessionCookie,
   resolveSessionSecret,
   sessionCookieName,
@@ -42,6 +43,15 @@ describe("sessionCookieName", () => {
   test("encodes slash in nested profile id", () => {
     expect(sessionCookieName("team/main")).toBe("sqd_session_team%2Fmain")
   })
+})
+
+test("clearSessionCookie expires only the selected profile cookie", () => {
+  const cookie = clearSessionCookie("team/main", true)
+  expect(cookie).toStartWith("sqd_session_team%2Fmain=;")
+  expect(cookie).toContain("Max-Age=0")
+  expect(cookie).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+  expect(cookie).toContain("HttpOnly")
+  expect(cookie).toContain("Secure")
 })
 
 describe("createSessionCookie + verifySessionCookie", () => {

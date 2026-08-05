@@ -570,26 +570,20 @@ function composeFromConfigWindow(
   fallbackTimezone: string,
 ): DashboardWindow {
   if (configWindow.kind === "calendar") {
-    // Config anchor wins. Compute next resetAt from the anchor.
-    let resetAt: string | undefined
-    if (configWindow.anchor) {
-      resetAt = computeNextResetAt(configWindow, new Date(generatedAt))
-    } else if (configWindow.resetAt) {
-      resetAt =
-        Date.parse(configWindow.resetAt) > Date.parse(generatedAt) ? configWindow.resetAt : undefined
-    }
-    // Provider resetAt fills only when config did not produce one AND the
-    // provider window has no anchor (i.e., provider is reporting the same
-    // one-cycle policy). If config has anchor, provider resetAt must never
-    // override — fall back to leaving resetAt undefined.
-    if (!resetAt && providerWindow?.kind === "calendar" && !configWindow.anchor && providerWindow.resetAt) {
-      resetAt = providerWindow.resetAt
-    }
+    // API runtime deadline is authoritative. Configured anchor/resetAt is
+    // only a fallback for providers (such as Poe) that do not report one.
+    const providerResetAt = futureResetAt(providerWindow?.resetAt, generatedAt)
+    const resetAt = providerResetAt
+      ?? (configWindow.anchor
+        ? computeNextResetAt(configWindow, new Date(generatedAt))
+        : futureResetAt(configWindow.resetAt, generatedAt))
     const label = labelWindow(configWindow, resetAt)
     const w: DashboardWindow = {
       kind: "calendar",
       label,
-      timezone: configWindow.timezone,
+      timezone: providerResetAt && providerWindow?.kind === "calendar"
+        ? providerWindow.timezone
+        : configWindow.timezone,
       ...(resetAt ? { resetAt } : {}),
       ...(configWindow.anchor ? { anchor: configWindow.anchor } : {}),
     }
@@ -605,28 +599,23 @@ function composeFromConfigWindow(
         windowStartAt = new Date(nowMs - durationMs).toISOString()
       }
     }
-    // Provider runtime resetAt for a rolling window may fill when present
-    // (represents the same rolling policy the config declares).
-    const nowMs = Date.parse(generatedAt)
-    let resetAt = configWindow.resetAt && Date.parse(configWindow.resetAt) > nowMs
-      ? configWindow.resetAt
-      : undefined
-    if (!resetAt && providerWindow?.kind === "rolling" && providerWindow.resetAt && Date.parse(providerWindow.resetAt) > nowMs) {
-      resetAt = providerWindow.resetAt
-    }
+    const providerResetAt = futureResetAt(providerWindow?.resetAt, generatedAt)
+    const resetAt = providerResetAt ?? futureResetAt(configWindow.resetAt, generatedAt)
     const label = labelWindow(configWindow, resetAt)
     const w: DashboardWindow = {
       kind: "rolling",
       label,
       duration: configWindow.duration,
-      timezone: fallbackTimezone,
+      timezone: providerResetAt && providerWindow?.kind === "calendar"
+        ? providerWindow.timezone
+        : fallbackTimezone,
       ...(resetAt ? { resetAt } : {}),
       ...(windowStartAt ? { windowStartAt } : {}),
     }
     return w
   }
-  // fixed — keep resetAt even when past so status logic can detect expiry.
-  const resetAt = configWindow.resetAt
+  // fixed — API remains authoritative even when past so status detects expiry.
+  const resetAt = providerWindow?.resetAt ?? configWindow.resetAt
   const label = labelWindow(configWindow, resetAt)
   const w: DashboardWindow = {
     kind: "fixed",
@@ -635,6 +624,11 @@ function composeFromConfigWindow(
     timezone: fallbackTimezone,
   }
   return w
+}
+
+function futureResetAt(resetAt: string | undefined, generatedAt: string): string | undefined {
+  if (!resetAt) return undefined
+  return Date.parse(resetAt) > Date.parse(generatedAt) ? resetAt : undefined
 }
 
 function composeFromProviderOnlyWindow(

@@ -362,8 +362,8 @@ test("Poe balance above configuredLimit shows used=0, omits percentUsed, status 
   expect(metric.status).toBe("ok")
 })
 
-// Behavior 8: provider runtime resetAt does NOT replace configured recurring anchor.
-test("provider runtime resetAt does not replace configured recurring calendar anchor", () => {
+// Behavior 8: provider runtime resetAt takes priority over configured fallback anchor.
+test("provider runtime resetAt replaces configured recurring calendar fallback", () => {
   const config = makeConfig(baseConfig())
   // Provider metric advertises a resetAt that the anchor would never produce.
   const providerMetric: NormalizedMetric = {
@@ -382,10 +382,10 @@ test("provider runtime resetAt does not replace configured recurring calendar an
     providers: [{ providerAccountId: "poe-main", metrics: [providerMetric], cache: okCache }],
   })
   const window = payload.subscriptions[0]!.metrics[0]!.window!
-  // Configured anchor dayOfMonth=1 -> next reset is 2026-07-01, NOT provider's 2026-07-15.
+  // API says July 15; configured day 1 remains metadata/fallback only.
   expect(window.kind).toBe("calendar")
   expect(window.anchor).toEqual({ dayOfMonth: 1, timeOfDay: "00:00" })
-  expect(window.resetAt).toBe("2026-07-01T00:00:00Z")
+  expect(window.resetAt).toBe("2026-07-15T00:00:00Z")
   expect(window.timezone).toBe("UTC")
 })
 
@@ -432,7 +432,7 @@ test("rolling windowStartAt derived when provider history covers duration", () =
   expect(window.timezone).toBe("America/Los_Angeles")
 })
 
-test("configured rolling resetAt is projected as the authoritative cutoff", () => {
+test("configured rolling resetAt is used only when API omits a cutoff", () => {
   const metric: MetricConfig = {
     id: "five-hour",
     providerMetricId: "five-hour",
@@ -467,6 +467,28 @@ test("configured rolling resetAt is projected as the authoritative cutoff", () =
     resetAt: "2026-06-25T16:30:00Z",
     timezone: "America/Los_Angeles",
   })
+
+  const apiPayload = buildDashboardPayload({
+    config,
+    profileId: "self",
+    generatedAt: NOW,
+    providers: [{
+      providerAccountId: "poe-main",
+      metrics: [{
+        providerMetricId: "five-hour",
+        label: "5h quota",
+        unit: "%",
+        used: 10,
+        limit: 100,
+        sourceValueKind: "gauge-used",
+        sourceConfidence: "known",
+        window: { kind: "rolling", duration: "5h", resetAt: "2026-06-25T17:45:00Z" },
+      }],
+      cache: okCache,
+    }],
+  })
+  expect(apiPayload.subscriptions[0]!.metrics[0]!.window?.resetAt)
+    .toBe("2026-06-25T17:45:00Z")
 })
 
 test("rolling windowStartAt omitted when history does not cover duration", () => {

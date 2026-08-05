@@ -66,6 +66,12 @@ export function createSessionCookie(
   return `${sessionCookieName(profileId)}=${value}; ${attributes.join("; ")}`
 }
 
+export function clearSessionCookie(profileId: string, secure: boolean = false): string {
+  const attributes = ["HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT"]
+  if (secure) attributes.push("Secure")
+  return `${sessionCookieName(profileId)}=; ${attributes.join("; ")}`
+}
+
 export function verifySessionCookie(
   cookie: string,
   profile: ProfileConfig,

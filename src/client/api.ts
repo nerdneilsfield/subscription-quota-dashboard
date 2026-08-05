@@ -88,6 +88,21 @@ export async function createSession(
   }
 }
 
+export async function clearSession(
+  profileId: string,
+  signal?: AbortSignal,
+): Promise<ApiResult<{ ok: true }>> {
+  try {
+    const res = await request(
+      `/api/session/${encodeURIComponent(profileId)}/logout`,
+      { method: "POST", headers: JSON_HEADERS, ...(signal !== undefined ? { signal } : {}) },
+    )
+    return await mapResponse<{ ok: true }>(res)
+  } catch (err) {
+    return mapError(err, signal)
+  }
+}
+
 export async function getDashboard(
   profileId: string,
   range: RangeKey,

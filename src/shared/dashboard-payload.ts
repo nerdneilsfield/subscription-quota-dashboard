@@ -103,6 +103,7 @@ export type SummaryGroup = {
 
 export type DashboardPayload = {
   profile: { id: string; name: string }
+  profiles?: Array<{ id: string; name: string }>
   branding?: DashboardBrandingConfig
   generatedAt: string
   ranges: RangeKey[]

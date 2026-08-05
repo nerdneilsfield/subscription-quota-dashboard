@@ -9,6 +9,7 @@ import type { RangeKey } from "../../shared/domain"
 import type { DashboardStorage } from "../storage/repositories"
 import type { ProviderAdapter } from "../providers/types"
 import {
+  clearSessionCookie,
   createSessionCookie,
   sessionCookieName,
   verifySessionCookie,
@@ -339,6 +340,20 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: AppVariables }> {
     return c.json({ ok: true }, 200)
     },
   )
+
+  // --- POST /api/session/:profileId/logout ---
+  app.post("/api/session/:profileId/logout", (c) => {
+    const profileId = c.req.param("profileId")
+    if (!deps!.config.profiles.has(profileId)) return c.json({ error: "not found" }, 404)
+    const origin = c.req.header("origin")
+    if (!originAllowed(origin, c, secure, publicOrigin, !secure)) {
+      c.get("requestLogger").warn("auth.logout.denied", { profileId, reason: "origin_rejected", origin })
+      return c.json({ error: "forbidden" }, 403)
+    }
+    c.header("set-cookie", clearSessionCookie(profileId, secure))
+    c.get("requestLogger").info("auth.logout.succeeded", { profileId })
+    return c.json({ ok: true }, 200)
+  })
 
   // --- GET /api/dashboard/:profileId ---
   app.get("/api/dashboard/:profileId", (c) => {

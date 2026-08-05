@@ -314,6 +314,7 @@ export function buildDashboardPayload(input: DashboardProjectionInput): Dashboar
 
   return {
     profile: { id: profile.id, name: profile.name },
+    profiles: Array.from(input.config.profiles.values(), ({ id, name }) => ({ id, name })),
     ...(input.config.branding ? { branding: input.config.branding } : {}),
     generatedAt: input.generatedAt,
     ranges: ALL_RANGES,

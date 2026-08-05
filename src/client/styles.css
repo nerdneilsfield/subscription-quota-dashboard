@@ -296,6 +296,10 @@ button { cursor: pointer; }
 .language-switch__btn:hover { border-color: var(--color-muted); color: var(--color-ink); }
 .language-switch__btn.is-active { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-accent-ink); }
 .dashboard__controls .language-switch { padding-inline: var(--space-sm); border-inline-end: var(--rule-hairline) solid var(--color-rule-2); }
+.profile-switch { display: flex; align-items: center; gap: var(--space-2xs); color: var(--color-dim); font-family: var(--font-mono); font-size: var(--text-xs); }
+.profile-switch select, .btn-session { min-height: 2rem; border: var(--rule-hairline) solid var(--color-rule-2); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-ink-2); font: inherit; }
+.profile-switch select { padding-inline: var(--space-2xs); }
+.btn-session { padding-inline: var(--space-xs); cursor: pointer; }
 .auth-form__controls, .not-found__controls { display: flex; justify-content: flex-end; margin-block-end: var(--space-md); }
 .auth-form__controls .language-switch, .not-found__controls .language-switch { justify-content: flex-end; }
 

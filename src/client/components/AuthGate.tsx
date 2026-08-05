@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import type { DashboardPayload } from "../../shared/dashboard-payload"
 import type { RangeKey } from "../../shared/domain"
-import { createSession, getDashboard } from "../api"
+import { clearSession, createSession, getDashboard } from "../api"
 import { Dashboard } from "./Dashboard"
 import { LanguageSwitch } from "./LanguageSwitch"
 import { LoadingState } from "./LoadingState"
@@ -131,6 +131,20 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
         onSessionExpired={() => {
           setAuth("expired")
           setFormError(t("sessionExpired"))
+        }}
+        onChangeViewKey={async () => {
+          const ctrl = new AbortController()
+          sessionCtrlRef.current = ctrl
+          const res = await clearSession(profileId, ctrl.signal)
+          if (ctrl.signal.aborted) return
+          if (!res.ok) {
+            setFormError(getApiErrorMessage(res.code, t))
+            return
+          }
+          setInitialPayload(undefined)
+          setViewKey("")
+          setFormError(undefined)
+          setAuth("unauthenticated")
         }}
         {...(onRangeChange ? { onRangeChange } : {})}
       />

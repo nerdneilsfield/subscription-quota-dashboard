@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import type { DashboardPayload } from "../../shared/dashboard-payload"
 import type { RangeKey } from "../../shared/domain"
 import { getDashboard, refreshDashboard } from "../api"
@@ -32,10 +32,12 @@ interface DashboardProps {
   initialPayload?: DashboardPayload
   onSessionExpired?: () => void
   onRangeChange?: (range: RangeKey) => void
+  onChangeViewKey?: () => Promise<void>
 }
 
-export function Dashboard({ profileId, range, initialPayload, onSessionExpired, onRangeChange }: DashboardProps) {
+export function Dashboard({ profileId, range, initialPayload, onSessionExpired, onRangeChange, onChangeViewKey }: DashboardProps) {
   const { t } = useI18n()
+  const navigate = useNavigate()
   // Validate initialPayload identity BEFORE useState init to prevent
   // a one-frame flash of stale range/profile data.
   const validInitialPayload = initialPayload
@@ -252,6 +254,23 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
           </div>
         </div>
         <div className="dashboard__controls">
+          <label className="profile-switch">
+            <span>{t("profile")}</span>
+            <select
+              aria-label={t("switchProfile")}
+              value={profileId}
+              onChange={(event) => navigate(`/d/${encodeURIComponent(event.target.value)}?range=${range}`)}
+            >
+              {(payload.profiles ?? [payload.profile]).map((profile) => (
+                <option key={profile.id} value={profile.id}>{profile.name}</option>
+              ))}
+            </select>
+          </label>
+          {onChangeViewKey && (
+            <button type="button" className="btn-session" onClick={() => void onChangeViewKey()}>
+              {t("changeViewKey")}
+            </button>
+          )}
           <LanguageSwitch />
           <button
             type="button"

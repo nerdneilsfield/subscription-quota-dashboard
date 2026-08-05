@@ -1,0 +1,31 @@
+# Copy to docker-compose.yml and edit .env.production/config as needed.
+# The dashboard binds only to loopback; terminate HTTPS in host Caddy/Nginx.
+
+services:
+  subscription-quota-dashboard:
+    image: ${IMAGE:-ghcr.io/nerdneilsfield/subscription-quota-dashboard:v0.1.1}
+    container_name: subscription-quota-dashboard
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      CONFIG_PATH: /app/config/dashboard.config.ts
+      DASHBOARD_DB: /app/data/dashboard.db
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    volumes:
+      - dashboard-data:/app/data
+      # Keep this mount only when using a deployment-specific config file.
+      - ./config/dashboard.config.ts:/app/config/dashboard.config.ts:ro
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
+volumes:
+  dashboard-data:

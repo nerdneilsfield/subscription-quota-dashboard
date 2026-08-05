@@ -303,7 +303,7 @@ test("dynamic upstream account card shows provider identity, provenance, quota, 
       used: 5,
       remaining: 95,
       percentUsed: 5,
-      window: { kind: "rolling", label: "Rolling 7d", duration: "7d", resetAt: FUTURE_2D },
+      window: { kind: "rolling", label: "Rolling 7d", duration: "7d", resetAt: FUTURE_2D, timezone: "America/Los_Angeles" },
       display: { module: "period-quota-card", sourceConfidence: "known" },
     }, {
       id: "xai:abc123:on_demand", providerMetricId: "xai:abc123:on_demand", metricKey: "cp|payg",
@@ -329,6 +329,8 @@ test("dynamic upstream account card shows provider identity, provenance, quota, 
   expect(within(card as HTMLElement).getByText("Window 7d")).toBeTruthy()
   expect(within(card as HTMLElement).getByRole("progressbar", { name: "Weekly remaining" }).getAttribute("aria-valuenow")).toBe("95")
   expect(within(card as HTMLElement).getAllByText("Reset").length).toBe(2)
+  expect(within(card as HTMLElement).getByText("Time remaining: 48h 00m 00s")).toBeTruthy()
+  expect(within(card as HTMLElement).getByText(/Cutoff: 2026-06-27 05:00:00 GMT-7/)).toBeTruthy()
   expect(within(card as HTMLElement).getByText("Pay as you go")).toBeTruthy()
   expect(within(card as HTMLElement).getByText("Disabled")).toBeTruthy()
   expect(within(card as HTMLElement).getByText("Monthly credits")).toBeTruthy()

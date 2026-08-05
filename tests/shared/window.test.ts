@@ -107,14 +107,14 @@ test("computeNextResetAt resolves DST repeated local time to first occurrence", 
   expect(next).toBe("2026-11-01T05:30:00Z")
 })
 
-test("labelWindow includes reset text when resetAt known", () => {
+test("labelWindow keeps reset time out of the human label", () => {
   const window = {
     kind: "calendar" as const,
     period: "month" as const,
     timezone: "UTC",
   }
   const label = labelWindow(window, "2026-07-01T00:00:00Z")
-  expect(label).toBe("Monthly, resets 2026-07-01T00:00:00.000Z")
+  expect(label).toBe("Monthly")
 })
 
 test("labelWindow omits reset text when resetAt absent", () => {

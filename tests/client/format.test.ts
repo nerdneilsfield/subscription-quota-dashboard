@@ -4,6 +4,8 @@ import {
   formatBurnRate,
   formatPercentUsed,
   formatRelativeTime,
+  formatResetAt,
+  formatCountdown,
   maskAccount,
 } from "../../src/client/format"
 
@@ -51,6 +53,19 @@ test("formatRelativeTime renders future buckets", () => {
 test("formatRelativeTime renders past buckets", () => {
   expect(formatRelativeTime("2026-06-25T11:55:00.000Z", NOW)).toBe("5m ago")
   expect(formatRelativeTime("2026-06-25T09:00:00.000Z", NOW)).toBe("3h ago")
+})
+
+test("formatResetAt renders exact cutoff in the selected timezone", () => {
+  expect(formatResetAt("2026-06-25T12:00:00.000Z", "Asia/Shanghai"))
+    .toBe("2026-06-25 20:00:00 GMT+8")
+  expect(formatResetAt("2026-06-25T12:00:00.000Z", "America/Los_Angeles"))
+    .toBe("2026-06-25 05:00:00 GMT-7")
+})
+
+test("formatCountdown keeps total hours and pads minutes and seconds", () => {
+  expect(formatCountdown("2026-06-27T15:04:05.000Z", NOW)).toBe("51h 04m 05s")
+  expect(formatCountdown("2026-06-27T15:04:05.000Z", NOW, "zh-CN")).toBe("51小时 04分 05秒")
+  expect(formatCountdown("2026-06-25T11:00:00.000Z", NOW)).toBe("0h 00m 00s")
 })
 
 test("maskAccount masks email local part and domain separately", () => {

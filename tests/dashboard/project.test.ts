@@ -429,6 +429,44 @@ test("rolling windowStartAt derived when provider history covers duration", () =
   expect(window.kind).toBe("rolling")
   expect(window.duration).toBe("5h")
   expect(window.windowStartAt).toBe("2026-06-25T07:00:00.000Z")
+  expect(window.timezone).toBe("America/Los_Angeles")
+})
+
+test("configured rolling resetAt is projected as the authoritative cutoff", () => {
+  const metric: MetricConfig = {
+    id: "five-hour",
+    providerMetricId: "five-hour",
+    label: "5h quota",
+    unit: "%",
+    limit: 100,
+    display: { module: "period-quota-card" },
+    window: { kind: "rolling", duration: "5h", resetAt: "2026-06-25T16:30:00Z" },
+  }
+  const config = makeConfig(baseConfig({
+    subscriptions: [{ id: "poe-api", name: "Poe API", providerId: "poe-main", metrics: [metric] }],
+  }))
+  const payload = buildDashboardPayload({
+    config,
+    profileId: "self",
+    generatedAt: NOW,
+    providers: [{
+      providerAccountId: "poe-main",
+      metrics: [{
+        providerMetricId: "five-hour",
+        label: "5h quota",
+        unit: "%",
+        used: 10,
+        limit: 100,
+        sourceValueKind: "gauge-used",
+        sourceConfidence: "known",
+      }],
+      cache: okCache,
+    }],
+  })
+  expect(payload.subscriptions[0]!.metrics[0]!.window).toMatchObject({
+    resetAt: "2026-06-25T16:30:00Z",
+    timezone: "America/Los_Angeles",
+  })
 })
 
 test("rolling windowStartAt omitted when history does not cover duration", () => {
@@ -887,6 +925,11 @@ test("dynamic subscription projection produces metrics with synthetic config", (
     providerMetricIds: ["codex:abc123:five_hour"],
     identity: { provider: "codex", providerLabel: "Codex", account: "alice@example.com", plan: "Pro", transport: "CLIProxy" },
     ui: { group: "Codex" },
+  }, {
+    id: "cliproxy:doubao:def456",
+    name: "Doubao",
+    providerMetricIds: ["doubao:def456:weekly"],
+    identity: { provider: "doubao", providerLabel: "Doubao", transport: "CLIProxy" },
   }]]])
   const providers: ProviderAccountProjection[] = [
     {
@@ -897,6 +940,12 @@ test("dynamic subscription projection produces metrics with synthetic config", (
         used: 72, limit: 100,
         sourceValueKind: "gauge-used", sourceConfidence: "known",
         window: { kind: "rolling", duration: "5h", resetAt: "2026-07-17T05:00:00Z" },
+      }, {
+        providerMetricId: "doubao:def456:weekly",
+        label: "Weekly", unit: "%",
+        used: 8, limit: 100,
+        sourceValueKind: "gauge-used", sourceConfidence: "known",
+        window: { kind: "rolling", duration: "7d", resetAt: "2026-07-18T05:00:00Z" },
       }],
       cache: okCache,
     },
@@ -906,7 +955,7 @@ test("dynamic subscription projection produces metrics with synthetic config", (
     selectedRange: "24h", providers,
     dynamicSubscriptions: dynSubs,
   })
-  expect(payload.subscriptions).toHaveLength(2)
+  expect(payload.subscriptions).toHaveLength(3)
   const dynSub = payload.subscriptions.find(s => s.id === "cliproxy:codex:abc123")!
   expect(dynSub.name).toBe("Codex")
   expect(dynSub.identity).toEqual({ provider: "codex", providerLabel: "Codex", account: "alice@example.com", plan: "Pro", transport: "CLIProxy" })
@@ -914,6 +963,9 @@ test("dynamic subscription projection produces metrics with synthetic config", (
   expect(dynSub.metrics[0]!.label).toBe("5h")
   expect(dynSub.metrics[0]!.used).toBe(72)
   expect(dynSub.metrics[0]!.display.module).toBe("period-quota-card")
+  expect(dynSub.metrics[0]!.window?.timezone).toBe("America/Los_Angeles")
+  const doubao = payload.subscriptions.find(s => s.id === "cliproxy:doubao:def456")!
+  expect(doubao.metrics[0]!.window?.timezone).toBe("Asia/Shanghai")
 })
 
 test("dynamic metrics excluded from summary groups", () => {

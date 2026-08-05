@@ -97,9 +97,9 @@ function parseTiers(
     // NOTE: plan used `equalsIgnoreCase` (not a JS method); replaced with
     // toUpperCase() per the plan's own note.
     if (type.toUpperCase() !== "TOKENS_LIMIT") continue
-    // Clamp percentage to 0-100 range (API may return 0-1 fraction in some edge cases)
+    // Zhipu returns percentage points: `1` means 1% used, not a 0-1 fraction.
     const rawPercentage = parseNumber(item.percentage) ?? 0
-    const percentage = rawPercentage <= 1 ? rawPercentage * 100 : rawPercentage
+    const percentage = Math.max(0, Math.min(100, rawPercentage))
     const resetAt = parseResetTime(item.nextResetTime)
     // Compute resetMs for fallback sorting from the parsed resetAt so numeric
     // seconds are normalized consistently with parseResetTime.

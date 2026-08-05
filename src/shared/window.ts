@@ -23,11 +23,10 @@ export function validateNormalizedWindow(window: LimitWindow, path = "window"): 
   if (window.kind === "fixed" && Date.parse(window.startsAt) >= Date.parse(window.resetAt)) throw new Error(`${path}.startsAt must be before resetAt`)
 }
 
-export function labelWindow(window: LimitWindow, resetAt?: string): string {
-  const reset = resetAt ? `, resets ${new Date(resetAt).toISOString()}` : ""
-  if (window.kind === "calendar") return `${window.period[0]!.toUpperCase()}${window.period.slice(1)}ly${reset}`
+export function labelWindow(window: LimitWindow, _resetAt?: string): string {
+  if (window.kind === "calendar") return `${window.period[0]!.toUpperCase()}${window.period.slice(1)}ly`
   if (window.kind === "rolling") return `Rolling ${window.duration}`
-  return `Fixed window${reset}`
+  return "Fixed window"
 }
 
 export function computeNextResetAt(window: Extract<LimitWindow, { kind: "calendar" }>, from: Date): string | undefined {

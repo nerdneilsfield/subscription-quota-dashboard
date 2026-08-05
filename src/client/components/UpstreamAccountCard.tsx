@@ -1,6 +1,6 @@
 import type { DashboardMetric, DashboardSubscription } from "../../shared/dashboard-payload"
 import { formatNumber, formatPercentUsed, maskAccount } from "../format"
-import { TimeDisplay } from "./TimeDisplay"
+import { ResetTimeDisplay, TimeDisplay } from "./TimeDisplay"
 import { getStatusLabel } from "./MetricCard"
 import { ProviderLogo } from "./ProviderLogo"
 import { useI18n } from "../i18n"
@@ -72,7 +72,7 @@ function QuotaRow({ metric, now }: { metric: DashboardMetric; now: Date }) {
       <dl className="quota-row__facts">
         <div><dt>{monetary ? t("balance") : t("remaining")}</dt><dd>{monetary && remaining !== undefined && metric.limit !== undefined ? `${formatMetricValue(remaining, metric.unit, locale)} / ${formatMetricValue(metric.limit, metric.unit, locale)}` : remaining !== undefined ? formatMetricValue(remaining, metric.unit, locale) : "—"}</dd></div>
         <div><dt>{t("used")}</dt><dd>{used !== undefined ? formatMetricValue(used, metric.unit, locale) : "—"}</dd></div>
-        <div><dt>{t("reset")}</dt><dd>{metric.window?.resetAt ? <><span>{formatReset(metric.window.resetAt, locale)}</span><TimeDisplay iso={metric.window.resetAt} now={now} /></> : t("notReported")}</dd></div>
+        <div><dt>{t("reset")}</dt><dd><ResetTimeDisplay iso={metric.window?.resetAt} now={now} timezone={metric.window?.timezone} /></dd></div>
         <div><dt>{t("status")}</dt><dd className={`status-${metric.status}`}>{getStatusLabel(metric.status, t)}</dd></div>
       </dl>
       {metric.display.notes && <p className="quota-row__notes">{metric.display.notes}</p>}
@@ -97,12 +97,4 @@ function StatusRow({ metric }: { metric: DashboardMetric }) {
 function formatMetricValue(value: number, unit: string, locale: "en" | "zh-CN"): string {
   if (unit === "$") return `$${value.toFixed(2)}`
   return `${formatNumber(value, locale)}${unit}`
-}
-
-function formatReset(iso: string, locale: "en" | "zh-CN"): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en-US", {
-    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  }).format(date)
 }

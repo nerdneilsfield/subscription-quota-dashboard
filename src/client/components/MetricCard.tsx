@@ -2,7 +2,7 @@ import type { DashboardMetric } from "../../shared/dashboard-payload"
 import type { DisplayModule, MetricStatus } from "../../shared/domain"
 import { formatNumber, formatBurnRate, formatPercentUsed } from "../format"
 import { Sparkline } from "./Sparkline"
-import { TimeDisplay } from "./TimeDisplay"
+import { ResetTimeDisplay, TimeDisplay } from "./TimeDisplay"
 import { useI18n, type Translator } from "../i18n"
 
 export const STATUS_LABEL: Record<MetricStatus, string> = {
@@ -54,7 +54,16 @@ export function MetricCard({ metric, now }: MetricCardProps) {
           <span className="status-badge__icon" aria-hidden="true">{STATUS_ICON[status]}</span>
           <span className="status-badge__text">{getStatusLabel(status, t)}</span>
         </span>
-        {metric.window?.label && <div className="metric-card__window">{metric.window.label}</div>}
+        {metric.window && (
+          <div className="metric-card__window">
+            <span>{metric.window.label}</span>
+            <ResetTimeDisplay
+              iso={metric.window.resetAt}
+              now={now}
+              timezone={metric.window.timezone}
+            />
+          </div>
+        )}
       </header>
       {unknownRange && <div className="metric-card__unknown">{t("insufficientData")}</div>}
       {!unknownRange && <ModuleBody metric={metric} now={now} />}

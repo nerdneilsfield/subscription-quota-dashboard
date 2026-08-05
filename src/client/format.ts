@@ -53,3 +53,40 @@ export function formatPercentUsed(percent: number, overflow: boolean): string {
 export function formatRelativeTime(iso: string, now: Date, locale: Locale = "en"): string {
   return formatRelativeTimeText(iso, now, getTranslator(locale))
 }
+
+export function formatResetAt(iso: string, timezone: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  let formatter: Intl.DateTimeFormat
+  try {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+      timeZoneName: "shortOffset",
+    })
+  } catch {
+    return formatResetAt(iso, "UTC")
+  }
+  const parts = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]))
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${parts.timeZoneName}`
+}
+
+export function formatCountdown(iso: string, now: Date, locale: Locale = "en"): string {
+  const target = Date.parse(iso)
+  if (Number.isNaN(target)) return "—"
+  const totalSeconds = Math.max(0, Math.ceil((target - now.getTime()) / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const paddedMinutes = String(minutes).padStart(2, "0")
+  const paddedSeconds = String(seconds).padStart(2, "0")
+  return locale === "zh-CN"
+    ? `${hours}小时 ${paddedMinutes}分 ${paddedSeconds}秒`
+    : `${hours}h ${paddedMinutes}m ${paddedSeconds}s`
+}

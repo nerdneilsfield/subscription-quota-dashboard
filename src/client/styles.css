@@ -217,6 +217,10 @@ button { cursor: pointer; }
 .metric-card__header { grid-area: meta; display: grid; align-content: center; gap: var(--space-2xs); min-width: 0; }
 .metric-card__label { margin: 0; color: var(--color-ink-2); font-size: var(--text-sm); font-weight: 600; overflow-wrap: anywhere; }
 .metric-card__window, .metric-card__duration, .metric-card__unknown, .metric-card__updated { color: var(--color-dim); font-family: var(--font-mono); font-size: var(--text-xs); }
+.metric-card__window, .reset-time { display: grid; gap: var(--space-3xs); }
+.reset-time { color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.reset-time time { color: var(--color-ink-2); }
+.reset-time--missing { color: var(--color-dim); }
 .metric-card__body { grid-area: body; display: grid; gap: var(--space-2xs); min-width: 0; }
 .metric-card__unknown { grid-area: body; }
 .metric-stat { display: flex; align-items: baseline; gap: var(--space-2xs); min-width: 0; }

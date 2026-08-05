@@ -412,7 +412,13 @@ function buildDashboardMetric(
     percentUsed = (used / limit) * 100
   }
 
-  const window = buildDashboardWindow(config, pm, generatedAt, p.projectedHistory)
+  const window = buildDashboardWindow(
+    config,
+    pm,
+    generatedAt,
+    p.projectedHistory,
+    defaultDisplayTimezone(p.providerType, p.subscriptionIdentity),
+  )
   const sourceConfidence = pm?.sourceConfidence ?? "unknown"
   const rangeStats = buildRangeStats(p, selectedRange, generatedAt)
 
@@ -513,16 +519,47 @@ function buildDashboardWindow(
   pm: NormalizedMetric | undefined,
   generatedAt: string,
   history: ProjectedHistoryPoint[],
+  fallbackTimezone: string,
 ): DashboardWindow | undefined {
   const configWindow = config.window
   const providerWindow = pm?.window
   if (!configWindow && !providerWindow) return undefined
 
   if (configWindow) {
-    return composeFromConfigWindow(configWindow, providerWindow, generatedAt, history)
+    return composeFromConfigWindow(configWindow, providerWindow, generatedAt, history, fallbackTimezone)
   }
   // No config window; use provider window directly.
-  return composeFromProviderOnlyWindow(providerWindow!, generatedAt)
+  return composeFromProviderOnlyWindow(providerWindow!, generatedAt, fallbackTimezone)
+}
+
+const DOMESTIC_PROVIDER_TYPES = new Set([
+  "deepseek",
+  "stepfun",
+  "siliconflow",
+  "kimi",
+  "zhipu",
+  "minimax",
+  "volcengine",
+  "mimo-token-plan",
+])
+
+const DOMESTIC_UPSTREAMS = new Set([
+  "deepseek",
+  "doubao",
+  "glm",
+  "kimi",
+  "minimax",
+  "qwen",
+  "stepfun",
+  "zhipu",
+])
+
+function defaultDisplayTimezone(providerType: string, identity?: SubscriptionIdentity): string {
+  const upstream = identity?.provider.toLowerCase()
+  if (DOMESTIC_PROVIDER_TYPES.has(providerType) || (upstream && DOMESTIC_UPSTREAMS.has(upstream))) {
+    return "Asia/Shanghai"
+  }
+  return "America/Los_Angeles"
 }
 
 function composeFromConfigWindow(
@@ -530,6 +567,7 @@ function composeFromConfigWindow(
   providerWindow: LimitWindow | undefined,
   generatedAt: string,
   history: ProjectedHistoryPoint[],
+  fallbackTimezone: string,
 ): DashboardWindow {
   if (configWindow.kind === "calendar") {
     // Config anchor wins. Compute next resetAt from the anchor.
@@ -569,8 +607,11 @@ function composeFromConfigWindow(
     }
     // Provider runtime resetAt for a rolling window may fill when present
     // (represents the same rolling policy the config declares).
-    let resetAt: string | undefined
-    if (providerWindow?.kind === "rolling" && providerWindow.resetAt) {
+    const nowMs = Date.parse(generatedAt)
+    let resetAt = configWindow.resetAt && Date.parse(configWindow.resetAt) > nowMs
+      ? configWindow.resetAt
+      : undefined
+    if (!resetAt && providerWindow?.kind === "rolling" && providerWindow.resetAt && Date.parse(providerWindow.resetAt) > nowMs) {
       resetAt = providerWindow.resetAt
     }
     const label = labelWindow(configWindow, resetAt)
@@ -578,6 +619,7 @@ function composeFromConfigWindow(
       kind: "rolling",
       label,
       duration: configWindow.duration,
+      timezone: fallbackTimezone,
       ...(resetAt ? { resetAt } : {}),
       ...(windowStartAt ? { windowStartAt } : {}),
     }
@@ -590,6 +632,7 @@ function composeFromConfigWindow(
     kind: "fixed",
     label,
     resetAt,
+    timezone: fallbackTimezone,
   }
   return w
 }
@@ -597,6 +640,7 @@ function composeFromConfigWindow(
 function composeFromProviderOnlyWindow(
   providerWindow: LimitWindow,
   generatedAt: string,
+  fallbackTimezone: string,
 ): DashboardWindow {
   if (providerWindow.kind === "calendar") {
     const resetAt =
@@ -620,6 +664,7 @@ function composeFromProviderOnlyWindow(
       kind: "rolling",
       label: labelWindow(providerWindow, resetAt),
       duration: providerWindow.duration,
+      timezone: fallbackTimezone,
       ...(resetAt ? { resetAt } : {}),
     }
   }
@@ -628,6 +673,7 @@ function composeFromProviderOnlyWindow(
   return {
     kind: "fixed",
     label: labelWindow(providerWindow, resetAt),
+    timezone: fallbackTimezone,
     ...(resetAt ? { resetAt } : {}),
   }
 }

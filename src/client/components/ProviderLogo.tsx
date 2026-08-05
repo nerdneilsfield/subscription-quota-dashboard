@@ -1,6 +1,8 @@
 import type { ReactNode } from "react"
 import mimoLogo from "../assets/xiaomi-mimo.png"
 import doubaoLogo from "../assets/doubao.png"
+import zhipuLogo from "../assets/zhipu.png"
+import kimiLogo from "../assets/kimi.png"
 
 interface ProviderLogoProps {
   provider?: string
@@ -37,6 +39,8 @@ function normalizeProvider(value: string): string {
   if (normalized.includes("opencode")) return "opencode"
   if (normalized.includes("mimo") || normalized.includes("xiaomi")) return "mimo"
   if (normalized.includes("doubao") || normalized.includes("volcengine")) return "doubao"
+  if (normalized.includes("zhipu") || normalized.includes("bigmodel") || normalized.includes("glm")) return "zhipu"
+  if (normalized.includes("kimi") || normalized.includes("moonshot")) return "kimi"
   return "fallback"
 }
 
@@ -55,4 +59,6 @@ const LOGOS: Record<string, LogoDefinition> = {
   opencode: { viewBox: "0 0 300 300", paths: <g transform="translate(30 0)"><path d="M180 240H60V120H180V240Z" opacity=".35"/><path fillRule="evenodd" d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z" clipRule="evenodd" /></g> },
   mimo: { kind: "image", src: mimoLogo },
   doubao: { kind: "image", src: doubaoLogo },
+  zhipu: { kind: "image", src: zhipuLogo },
+  kimi: { kind: "image", src: kimiLogo },
 }

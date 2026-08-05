@@ -26,7 +26,7 @@ function makeResp(status: number, body: unknown): Response {
 // plain async fake through `unknown` to satisfy `typeof fetch`.
 type FakeFetch = typeof fetch
 
-test("zhipu classifies by unit field (3=five_hour, 6=weekly_limit)", async () => {
+test("zhipu classifies by unit and treats percentage as percentage points", async () => {
   const calls: { url: string; auth: string }[] = []
   const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     calls.push({ url: String(input), auth: init?.headers instanceof Headers ? init.headers.get("Authorization") ?? "" : "" })
@@ -35,7 +35,7 @@ test("zhipu classifies by unit field (3=five_hour, 6=weekly_limit)", async () =>
       data: {
         level: "PRO",
         limits: [
-          { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 20, nextResetTime: "2026-07-17T05:00:00Z" },
+          { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 1, nextResetTime: "2026-07-17T05:00:00Z" },
           { type: "TOKENS_LIMIT", unit: 6, number: 7, percentage: 50, nextResetTime: "2026-07-24T00:00:00Z" },
         ],
       },
@@ -47,9 +47,9 @@ test("zhipu classifies by unit field (3=five_hour, 6=weekly_limit)", async () =>
   expect(calls[0]!.auth).toBe("zp-key")
   expect(result.metrics).toHaveLength(2)
   const fiveHour = result.metrics.find((m) => m.providerMetricId === "five_hour")!
-  expect(fiveHour.used).toBe(20)
+  expect(fiveHour.used).toBe(1)
   expect(fiveHour.limit).toBe(100)
-  expect(fiveHour.remaining).toBe(80)
+  expect(fiveHour.remaining).toBe(99)
   expect(fiveHour.sourceValueKind).toBe("gauge-used")
   const weekly = result.metrics.find((m) => m.providerMetricId === "weekly_limit")!
   expect(weekly.used).toBe(50)

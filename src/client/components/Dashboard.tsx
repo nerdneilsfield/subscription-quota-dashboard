@@ -33,9 +33,10 @@ interface DashboardProps {
   onSessionExpired?: () => void
   onRangeChange?: (range: RangeKey) => void
   onChangeViewKey?: () => Promise<void>
+  onLogout?: () => Promise<void>
 }
 
-export function Dashboard({ profileId, range, initialPayload, onSessionExpired, onRangeChange, onChangeViewKey }: DashboardProps) {
+export function Dashboard({ profileId, range, initialPayload, onSessionExpired, onRangeChange, onChangeViewKey, onLogout }: DashboardProps) {
   const { t } = useI18n()
   const navigate = useNavigate()
   // Validate initialPayload identity BEFORE useState init to prevent
@@ -269,6 +270,11 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
           {onChangeViewKey && (
             <button type="button" className="btn-session" onClick={() => void onChangeViewKey()}>
               {t("changeViewKey")}
+            </button>
+          )}
+          {onLogout && (
+            <button type="button" className="btn-session btn-logout" onClick={() => void onLogout()}>
+              {t("logout")}
             </button>
           )}
           <LanguageSwitch />

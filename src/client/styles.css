@@ -300,6 +300,7 @@ button { cursor: pointer; }
 .profile-switch select, .btn-session { min-height: 2rem; border: var(--rule-hairline) solid var(--color-rule-2); border-radius: var(--radius-input); background: var(--color-paper-2); color: var(--color-ink-2); font: inherit; }
 .profile-switch select { padding-inline: var(--space-2xs); }
 .btn-session { padding-inline: var(--space-xs); cursor: pointer; }
+.btn-logout { border-color: var(--color-error); color: var(--color-error); }
 .auth-form__controls, .not-found__controls { display: flex; justify-content: flex-end; margin-block-end: var(--space-md); }
 .auth-form__controls .language-switch, .not-found__controls .language-switch { justify-content: flex-end; }
 

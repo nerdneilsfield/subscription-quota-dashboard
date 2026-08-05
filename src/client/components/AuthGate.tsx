@@ -117,6 +117,21 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
     }
   }, [])
 
+  const endCurrentSession = async () => {
+    const ctrl = new AbortController()
+    sessionCtrlRef.current = ctrl
+    const res = await clearSession(profileId, ctrl.signal)
+    if (ctrl.signal.aborted) return
+    if (!res.ok) {
+      setFormError(getApiErrorMessage(res.code, t))
+      return
+    }
+    setInitialPayload(undefined)
+    setViewKey("")
+    setFormError(undefined)
+    setAuth("unauthenticated")
+  }
+
   if (auth === "checking-session") {
     if (sessionError) return <NetworkError message={sessionError} onRetry={retrySession} />
     return <LoadingState />
@@ -132,20 +147,8 @@ export function AuthGate({ profileId, range, onRangeChange }: AuthGateProps) {
           setAuth("expired")
           setFormError(t("sessionExpired"))
         }}
-        onChangeViewKey={async () => {
-          const ctrl = new AbortController()
-          sessionCtrlRef.current = ctrl
-          const res = await clearSession(profileId, ctrl.signal)
-          if (ctrl.signal.aborted) return
-          if (!res.ok) {
-            setFormError(getApiErrorMessage(res.code, t))
-            return
-          }
-          setInitialPayload(undefined)
-          setViewKey("")
-          setFormError(undefined)
-          setAuth("unauthenticated")
-        }}
+        onChangeViewKey={endCurrentSession}
+        onLogout={endCurrentSession}
         {...(onRangeChange ? { onRangeChange } : {})}
       />
     )

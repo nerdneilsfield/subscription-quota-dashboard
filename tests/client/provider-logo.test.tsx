@@ -28,3 +28,14 @@ test.each(["Doubao Agent Plan", "Doubao Coding Plan", "Volcengine"])("renders ca
   expect(logo.tagName).toBe("IMG")
   expect(logo.closest("span")?.classList.contains("provider-logo--doubao")).toBe(true)
 })
+
+test.each([
+  ["Zhipu Coding Plan", "zhipu"],
+  ["Kimi Coding Plan", "kimi"],
+])("renders cached provider image for %s", (label, key) => {
+  const { container } = render(<ProviderLogo label={label} />)
+  const logo = within(container).getByRole("img", { name: `${label} logo` })
+
+  expect(logo.tagName).toBe("IMG")
+  expect(logo.closest("span")?.classList.contains(`provider-logo--${key}`)).toBe(true)
+})

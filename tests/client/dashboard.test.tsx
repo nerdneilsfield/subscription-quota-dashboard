@@ -418,6 +418,18 @@ test("change key clears current profile session and returns to view-key form", a
   expect(calls.some((call) => call.method === "POST" && call.url.endsWith("/api/session/self/logout"))).toBe(true)
 })
 
+test("log out clears current profile session and returns to view-key form", async () => {
+  installApi({
+    dashboard: () => ({ status: 200, body: richPayload() }),
+    session: () => ({ status: 200, body: { ok: true } }),
+  })
+  renderApp("/d/self")
+  await waitFor(() => expect(screen().getByRole("button", { name: "Log out" })).toBeTruthy())
+  fireEvent.click(screen().getByRole("button", { name: "Log out" }))
+  await waitFor(() => expect(screen().getByLabelText(/view key/i)).toBeTruthy())
+  expect(calls.some((call) => call.method === "POST" && call.url.endsWith("/api/session/self/logout"))).toBe(true)
+})
+
 test("direct visit with no cookie (401) shows the unauthenticated view-key form", async () => {
   installApi({ dashboard: () => ({ status: 401, body: { error: "unauthorized" } }) })
   renderApp("/d/self")

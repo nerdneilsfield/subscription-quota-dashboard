@@ -131,12 +131,17 @@ docker run --detach \
   ghcr.io/nerdneilsfield/subscription-quota-dashboard:latest
 ```
 
-The server loads config once at startup. Restart the container after editing
-the config or env file:
+The server loads config once at startup. After editing a mounted config file,
+restart the container. After editing an env file, recreate the container:
 
 ```bash
-docker restart subscription-quota-dashboard
+docker stop subscription-quota-dashboard
+docker rm subscription-quota-dashboard
+# Re-run the docker run command above.
 ```
+
+`docker restart` does not reload environment variables from the original
+`--env-file`; those values are fixed when the container is created.
 
 See [multi-profile.md](./multi-profile.md) for profile configuration.
 

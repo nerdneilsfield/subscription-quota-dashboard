@@ -126,11 +126,16 @@ docker run --detach \
   ghcr.io/nerdneilsfield/subscription-quota-dashboard:latest
 ```
 
-服务启动时只加载一次 config。修改 config 或 env 后重启容器：
+服务启动时只加载一次 config。修改挂载的 config 文件后可重启容器；修改 env
+文件后必须重建容器：
 
 ```bash
-docker restart subscription-quota-dashboard
+docker stop subscription-quota-dashboard
+docker rm subscription-quota-dashboard
+# 重新执行上面的 docker run 命令。
 ```
+
+`docker restart` 不会重新读取原始 `--env-file`；环境变量在容器创建时即固定。
 
 Profile 配置见[多 Profile 指南](./multi-profile.zh-CN.md)。
 

@@ -952,6 +952,11 @@ test("dynamic subscription projection produces metrics with synthetic config", (
     name: "Doubao",
     providerMetricIds: ["doubao:def456:weekly"],
     identity: { provider: "doubao", providerLabel: "Doubao", transport: "CLIProxy" },
+  }, {
+    id: "cliproxy:xai:ghi789",
+    name: "XAI",
+    providerMetricIds: ["xai:ghi789:monthly"],
+    identity: { provider: "xai", providerLabel: "XAI", transport: "CLIProxy" },
   }]]])
   const providers: ProviderAccountProjection[] = [
     {
@@ -968,6 +973,12 @@ test("dynamic subscription projection produces metrics with synthetic config", (
         used: 8, limit: 100,
         sourceValueKind: "gauge-used", sourceConfidence: "known",
         window: { kind: "rolling", duration: "7d", resetAt: "2026-07-18T05:00:00Z" },
+      }, {
+        providerMetricId: "xai:ghi789:monthly",
+        label: "Monthly credits", unit: "$",
+        used: 0, limit: 150,
+        sourceValueKind: "gauge-used", sourceConfidence: "known",
+        window: { kind: "rolling", duration: "30d", resetAt: "2026-09-01T00:00:00Z" },
       }],
       cache: okCache,
     },
@@ -977,7 +988,7 @@ test("dynamic subscription projection produces metrics with synthetic config", (
     selectedRange: "24h", providers,
     dynamicSubscriptions: dynSubs,
   })
-  expect(payload.subscriptions).toHaveLength(3)
+  expect(payload.subscriptions).toHaveLength(4)
   const dynSub = payload.subscriptions.find(s => s.id === "cliproxy:codex:abc123")!
   expect(dynSub.name).toBe("Codex")
   expect(dynSub.identity).toEqual({ provider: "codex", providerLabel: "Codex", account: "alice@example.com", plan: "Pro", transport: "CLIProxy" })
@@ -988,6 +999,10 @@ test("dynamic subscription projection produces metrics with synthetic config", (
   expect(dynSub.metrics[0]!.window?.timezone).toBe("America/Los_Angeles")
   const doubao = payload.subscriptions.find(s => s.id === "cliproxy:doubao:def456")!
   expect(doubao.metrics[0]!.window?.timezone).toBe("Asia/Shanghai")
+  const xai = payload.subscriptions.find(s => s.id === "cliproxy:xai:ghi789")!
+  expect(xai.metrics[0]!.remaining).toBe(150)
+  expect(xai.metrics[0]!.percentUsed).toBe(0)
+  expect(xai.metrics[0]!.status).toBe("ok")
 })
 
 test("dynamic metrics excluded from summary groups", () => {

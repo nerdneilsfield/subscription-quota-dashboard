@@ -312,7 +312,7 @@ test("dynamic upstream account card shows provider identity, provenance, quota, 
       display: { module: "manual-status-card", sourceConfidence: "known", notes: "Disabled" },
     }, {
       id: "xai:abc123:monthly", providerMetricId: "xai:abc123:monthly", metricKey: "cp|monthly",
-      label: "Monthly credits", unit: "$", status: "ok", limit: 150, used: 0, remaining: 150, percentUsed: 0,
+      label: "Monthly credits", unit: "$", status: "ok", limit: 150, used: 0, percentUsed: 0,
       window: { kind: "rolling", label: "Rolling 30d", duration: "30d", resetAt: "2026-09-01T00:00:00.000Z" },
       display: { module: "period-quota-card", sourceConfidence: "known" },
     }],

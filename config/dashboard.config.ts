@@ -3,6 +3,8 @@ import type { DashboardConfigInput } from "../src/shared/domain"
 const config: DashboardConfigInput = {
   // Optional: overrides the localized header slogan above the profile name.
   // branding: { slogan: "SQD / 配额运营" },
+  // 0 disables background refresh. Positive values must be >= 30 seconds.
+  refresh: { intervalSeconds: Number(process.env.AUTO_REFRESH_INTERVAL_SECONDS ?? 0) },
   providers: [
     {
       id: "poe-main",
@@ -33,6 +35,8 @@ const config: DashboardConfigInput = {
       id: "poe-api",
       name: "Poe API",
       providerId: "poe-main",
+      // Optional per-subscription override; 0 disables this subscription.
+      // refresh: { intervalSeconds: 60 },
       metrics: [
         {
           id: "points",

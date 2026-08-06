@@ -124,6 +124,7 @@ declares port `3000` plus the `/app/data` volume.
 | `PORT`                      | Server port. Defaults to `3000`.                                         |
 | `HOST`                      | Listen address. Defaults to `127.0.0.1`; image defaults to `0.0.0.0`.    |
 | `PUBLIC_ORIGIN`             | Browser-facing HTTP(S) origin; required behind an HTTPS reverse proxy.   |
+| `AUTO_REFRESH_INTERVAL_SECONDS` | Global background refresh interval used by the sample config; `0` disables. |
 | `CONFIG_PATH`               | Dashboard config path; image defaults to `/app/config/dashboard.config.ts`. |
 | `DASHBOARD_DB`              | SQLite path; image defaults to `/app/data/dashboard.db`.                 |
 | `LOG_LEVEL`                 | `debug`, `info`, `warn`, `error`, or `silent`; defaults to `debug` in development and `info` in production. |
@@ -155,6 +156,32 @@ const config: DashboardConfigInput = {
 Omit `branding.slogan` to use the built-in localized Chinese/English slogan.
 The large profile title, such as `Personal`, remains controlled by
 `profiles[].name`.
+
+Background provider refresh is configured globally and may be overridden per
+subscription:
+
+```ts
+const config: DashboardConfigInput = {
+  refresh: { intervalSeconds: Number(process.env.AUTO_REFRESH_INTERVAL_SECONDS ?? 0) },
+  subscriptions: [
+    {
+      id: "poe-api",
+      providerId: "poe-main",
+      refresh: { intervalSeconds: 60 }, // overrides the global interval
+      // name, metrics ...
+    },
+  ],
+  // providers, profiles ...
+}
+```
+
+`intervalSeconds: 0` disables scheduled refresh at either level. Positive
+values must be at least 30 seconds. A subscription value takes precedence over
+the global value. When subscriptions share one provider account, provider APIs
+refresh at account scope, so the shortest enabled interval wins. Scheduled
+providers refresh once on server startup, then wait the configured interval
+after each completed run; overlapping manual and scheduled refreshes join the
+same provider-account singleflight.
 
 Provider API keys are referenced by environment-variable name (`apiKeyEnv`),
 **not** by literal value. The only exception is the manual provider, which has
@@ -198,7 +225,8 @@ reset all stored history (config-driven manual values are unaffected).
 `range` is one of `1h`, `24h`, `7d`, `30d` (defaults to `24h`). An invalid
 `range` or `profileId` renders the 404 view. There is **no frontend
 auto-polling** — data is fetched on mount, on manual refresh, and on a
-visibility-change refetch when the tab becomes visible again.
+visibility-change refetch when the tab becomes visible again. The optional
+server-side scheduler above refreshes provider data into SQLite independently.
 
 ## Authentication & sessions
 

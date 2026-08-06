@@ -22,7 +22,7 @@ import {
   isAllowedDevCorsOrigin,
 } from "./security"
 import { resolveClientIp } from "./client-ip"
-import { createRefreshService } from "../refresh/refresh-service"
+import { createRefreshService, type RefreshService } from "../refresh/refresh-service"
 import { silentLogger, type Logger } from "../logging/logger"
 
 type AppVariables = {
@@ -42,6 +42,7 @@ export type AppDeps = {
   trustedProxies?: string[]
   publicOrigin?: string
   logger?: Logger
+  refreshService?: RefreshService
 }
 
 const VALID_RANGES: ReadonlySet<string> = new Set(["1h", "24h", "7d", "30d"])
@@ -189,7 +190,7 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: AppVariables }> {
     now: nowMs,
   })
 
-  const refreshService = createRefreshService({
+  const refreshService = deps.refreshService ?? createRefreshService({
     config: deps.config,
     storage: deps.storage,
     providers: deps.providers,

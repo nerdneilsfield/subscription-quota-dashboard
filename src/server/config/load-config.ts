@@ -14,6 +14,7 @@ import type {
 } from "../../shared/domain"
 
 const ROLLING_DURATION_RE = /^\d+(m|h|d)$/
+const MIN_REFRESH_INTERVAL_SECONDS = 30
 const VALID_DISPLAY_MODULES = new Set<string>([
   "balance-card",
   "rolling-window-card",
@@ -224,6 +225,15 @@ function fail(path: string, message: string): never {
   throw new Error(`Invalid dashboard config: ${path}: ${message}`)
 }
 
+function validateRefreshInterval(intervalSeconds: number, path: string): void {
+  if (!Number.isInteger(intervalSeconds) || intervalSeconds < 0) {
+    fail(path, "must be a non-negative integer")
+  }
+  if (intervalSeconds > 0 && intervalSeconds < MIN_REFRESH_INTERVAL_SECONDS) {
+    fail(path, `must be 0 or at least ${MIN_REFRESH_INTERVAL_SECONDS} seconds`)
+  }
+}
+
 function validateWindow(window: LimitWindow, path: string): void {
   if (window.kind === "calendar") {
     if (window.timezone === undefined || window.timezone === "") {
@@ -289,6 +299,9 @@ function validateBranding(branding: DashboardBrandingConfig | undefined): void {
 
 export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConfig {
   validateBranding(input.branding)
+  if (input.refresh !== undefined) {
+    validateRefreshInterval(input.refresh.intervalSeconds, "refresh.intervalSeconds")
+  }
   const providers = new Map<string, ProviderAccountConfig>()
   const providerRuntime = new Map<string, ProviderRuntimeState>()
 
@@ -366,6 +379,12 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
       fail(
         `subscriptions[${subscription.id}].providerId`,
         `references unknown provider "${subscription.providerId}"`,
+      )
+    }
+    if (subscription.refresh !== undefined) {
+      validateRefreshInterval(
+        subscription.refresh.intervalSeconds,
+        `subscriptions[${subscription.id}].refresh.intervalSeconds`,
       )
     }
     const metricIds = new Set<string>()
@@ -449,7 +468,14 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
     profiles.set(profile.id, profile)
   }
 
-  return { providers, providerRuntime, subscriptions, profiles, ...(input.branding ? { branding: input.branding } : {}) }
+  return {
+    providers,
+    providerRuntime,
+    subscriptions,
+    profiles,
+    ...(input.branding ? { branding: input.branding } : {}),
+    ...(input.refresh ? { refresh: input.refresh } : {}),
+  }
 }
 
 export async function loadDashboardConfigFromFile(

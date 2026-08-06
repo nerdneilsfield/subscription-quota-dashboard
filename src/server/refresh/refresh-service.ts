@@ -53,6 +53,7 @@ export type RefreshOutcome =
 
 export type RefreshService = {
   refreshProfile(req: RefreshRequest): Promise<RefreshOutcome>
+  refreshProviderAccounts(providerAccountIds: string[], trigger?: string): Promise<void>
   getPayload(profileId: string, range: RangeKey): DashboardPayload
   isInFlight(providerAccountId: string): boolean
 }
@@ -701,9 +702,23 @@ export function createRefreshService(deps: RefreshServiceDeps): RefreshService {
     return inFlight.has(providerAccountId)
   }
 
+  async function refreshProviderAccounts(providerAccountIds: string[], trigger = "internal"): Promise<void> {
+    const operationLogger = logger.child({ trigger })
+    const uniqueIds = [...new Set(providerAccountIds)]
+    await Promise.all(
+      uniqueIds.map((providerAccountId) =>
+        refreshProviderAccount(
+          providerAccountId,
+          storage.providerCache.get(providerAccountId),
+          operationLogger,
+        ),
+      ),
+    )
+  }
+
   function getPayload(profileId: string, range: RangeKey): DashboardPayload {
     return buildPayloadFromStorage(profileId, now().toISOString(), range)
   }
 
-  return { refreshProfile, getPayload, isInFlight }
+  return { refreshProfile, refreshProviderAccounts, getPayload, isInFlight }
 }

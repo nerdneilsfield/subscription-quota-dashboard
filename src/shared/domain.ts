@@ -62,7 +62,13 @@ export type SubscriptionConfig = {
   name: string
   providerId: string
   metrics: MetricConfig[]
+  refresh?: RefreshScheduleConfig
   ui?: { color?: string; group?: string; sort?: number }
+}
+
+export type RefreshScheduleConfig = {
+  /** 0 disables scheduled refresh; positive values must be at least 30 seconds. */
+  intervalSeconds: number
 }
 
 export type DashboardBrandingConfig = {
@@ -70,7 +76,7 @@ export type DashboardBrandingConfig = {
 }
 
 export type ProfileConfig = { id: string; name: string; viewKey: string | undefined; subscriptionIds: string[]; dynamicProviderIds?: string[] }
-export type DashboardConfigInput = { providers: ProviderAccountConfig[]; subscriptions: SubscriptionConfig[]; profiles: ProfileConfig[]; branding?: DashboardBrandingConfig }
+export type DashboardConfigInput = { providers: ProviderAccountConfig[]; subscriptions: SubscriptionConfig[]; profiles: ProfileConfig[]; branding?: DashboardBrandingConfig; refresh?: RefreshScheduleConfig }
 export type ProviderRuntimeState = {
   available: boolean
   apiKey?: string
@@ -94,4 +100,4 @@ export type SubscriptionIdentity = {
   plan?: string
   transport?: string
 }
-export type NormalizedConfig = { providers: Map<string, ProviderAccountConfig>; providerRuntime: Map<string, ProviderRuntimeState>; subscriptions: Map<string, SubscriptionConfig>; profiles: Map<string, ProfileConfig>; branding?: DashboardBrandingConfig }
+export type NormalizedConfig = { providers: Map<string, ProviderAccountConfig>; providerRuntime: Map<string, ProviderRuntimeState>; subscriptions: Map<string, SubscriptionConfig>; profiles: Map<string, ProfileConfig>; branding?: DashboardBrandingConfig; refresh?: RefreshScheduleConfig }

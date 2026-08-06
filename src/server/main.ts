@@ -26,6 +26,9 @@ import { resolveSessionSecret } from "./auth/session"
 import { parseTrustedProxies } from "./http/client-ip"
 import { createLogger, parseLogFormat, parseLogLevel } from "./logging/logger"
 import { createLoggedFetch } from "./logging/fetch"
+import { createRateLimiter } from "./auth/rate-limit"
+import { createRefreshService } from "./refresh/refresh-service"
+import { createRefreshScheduler } from "./refresh/refresh-scheduler"
 
 const port = Number(process.env.PORT ?? 3000)
 // Default to loopback only. Set HOST=0.0.0.0 (or a specific interface) to
@@ -121,6 +124,19 @@ async function main(): Promise<void> {
   // in the built server. In dev there is no build output, so the API server
   // serves no SPA and the Vite dev server (client:dev, :5173) serves the UI.
   const staticDir = existsSync(resolve("dist/client/index.html")) ? resolve("dist/client") : undefined
+  const now = (): Date => new Date()
+  const refreshService = createRefreshService({
+    config,
+    storage,
+    providers,
+    now,
+    logger,
+    rateLimiter: createRateLimiter({
+      maxAttempts: 1,
+      windowMs: 30_000,
+      now: () => now().getTime(),
+    }),
+  })
 
   const deps: AppDeps = {
     config,
@@ -130,6 +146,7 @@ async function main(): Promise<void> {
     environment: nodeEnv,
     trustedProxies,
     logger,
+    refreshService,
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
     ...(staticDir !== undefined ? { staticDir } : {}),
   }
@@ -141,6 +158,9 @@ async function main(): Promise<void> {
     staticClientEnabled: staticDir !== undefined,
     logLevel: logger.level,
   })
+
+  const refreshScheduler = createRefreshScheduler({ config, refreshService, logger })
+  refreshScheduler.start()
 }
 
 main().catch((err) => {

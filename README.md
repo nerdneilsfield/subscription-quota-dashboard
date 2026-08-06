@@ -178,10 +178,13 @@ const config: DashboardConfigInput = {
 `intervalSeconds: 0` disables scheduled refresh at either level. Positive
 values must be at least 30 seconds. A subscription value takes precedence over
 the global value. When subscriptions share one provider account, provider APIs
-refresh at account scope, so the shortest enabled interval wins. Scheduled
-providers refresh once on server startup, then wait the configured interval
-after each completed run; overlapping manual and scheduled refreshes join the
-same provider-account singleflight.
+refresh at account scope, so the shortest enabled interval wins. Provider
+accounts with the same provider type and normalized upstream URL are scheduled
+as one group, also using the shortest enabled interval in that group. Providers
+using their built-in URL share the same `default` upstream identity. Scheduled
+groups refresh once on server startup, then wait the configured interval after
+each completed run; overlapping manual and scheduled refreshes join the same
+provider-account singleflight.
 
 Provider API keys are referenced by environment-variable name (`apiKeyEnv`),
 **not** by literal value. The only exception is the manual provider, which has

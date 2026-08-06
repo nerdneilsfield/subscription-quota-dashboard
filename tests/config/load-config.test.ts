@@ -43,6 +43,24 @@ test("preserves a configured dashboard slogan", () => {
   expect(config.branding).toEqual({ slogan: "My quota room" })
 })
 
+test("preserves valid global and subscription refresh intervals", () => {
+  const input = structuredClone(baseConfig)
+  input.refresh = { intervalSeconds: 300 }
+  input.subscriptions[0]!.refresh = { intervalSeconds: 60 }
+  const config = loadDashboardConfig(input)
+  expect(config.refresh?.intervalSeconds).toBe(300)
+  expect(config.subscriptions.get("poe-api")?.refresh?.intervalSeconds).toBe(60)
+})
+
+test("allows zero to disable scheduled refresh and rejects unsafe intervals", () => {
+  expect(loadDashboardConfig({ ...baseConfig, refresh: { intervalSeconds: 0 } }).refresh).toEqual({ intervalSeconds: 0 })
+  expect(() => loadDashboardConfig({ ...baseConfig, refresh: { intervalSeconds: 29 } })).toThrow("refresh.intervalSeconds")
+
+  const input = structuredClone(baseConfig)
+  input.subscriptions[0]!.refresh = { intervalSeconds: 1.5 }
+  expect(() => loadDashboardConfig(input)).toThrow("subscriptions[poe-api].refresh.intervalSeconds")
+})
+
 test("rejects an empty dashboard slogan", () => {
   expect(() => loadDashboardConfig({ ...baseConfig, branding: { slogan: "   " } })).toThrow("branding.slogan")
 })

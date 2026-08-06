@@ -22,6 +22,7 @@ function richPayload(): DashboardPayload {
     summaryGroups: [
       {
         id: "g1", label: "Compute points", unit: "points",
+        providerType: "zhipu",
         sourceValueKind: "gauge-remaining", windowGroup: "rolling",
         remaining: 5000, consumption: 1500, burnRate: { value: 12.5, per: "hour" },
         estimatedExhaustionAt: FUTURE_3H, estimatedExhaustionConfidence: "conservative",
@@ -349,6 +350,9 @@ test("summary cards show label, remaining or -, consumption, burn rate, exhausti
   await loadDashboard()
   const summary = screen().getByTestId("summary")
   expect(within(summary).getByText("Compute points")).toBeTruthy()
+  const computeCard = within(summary).getByText("Compute points").closest("[data-summary]")!
+  expect(within(computeCard as HTMLElement).getByText("Zhipu")).toBeTruthy()
+  expect(within(computeCard as HTMLElement).getByText("remaining")).toBeTruthy()
   expect(within(summary).getByText("5,000")).toBeTruthy() // remaining
   expect(within(summary).getByText("1,500")).toBeTruthy() // consumption
   expect(within(summary).getByText("12.50/h")).toBeTruthy() // burn rate

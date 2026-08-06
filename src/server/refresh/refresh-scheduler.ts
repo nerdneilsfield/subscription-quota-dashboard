@@ -1,9 +1,12 @@
-import type { NormalizedConfig } from "../../shared/domain"
+import type { NormalizedConfig, ProviderAccountConfig } from "../../shared/domain"
 import { silentLogger, type Logger } from "../logging/logger"
 import type { RefreshService } from "./refresh-service"
 
 export type ProviderRefreshSchedule = {
-  providerAccountId: string
+  upstreamKey: string
+  providerType: ProviderAccountConfig["type"]
+  upstreamUrl: string
+  providerAccountIds: string[]
   intervalSeconds: number
   subscriptionIds: string[]
 }
@@ -16,6 +19,12 @@ export type RefreshScheduler = {
 
 type TimerHandle = unknown
 
+type AccountSchedule = {
+  providerAccountId: string
+  intervalSeconds: number
+  subscriptionIds: string[]
+}
+
 export type RefreshSchedulerDeps = {
   config: NormalizedConfig
   refreshService: Pick<RefreshService, "refreshProviderAccounts">
@@ -24,9 +33,23 @@ export type RefreshSchedulerDeps = {
   clearTimeoutFn?: (handle: TimerHandle) => void
 }
 
+function providerUpstream(provider: ProviderAccountConfig): {
+  upstreamKey: string
+  upstreamUrl: string
+} {
+  const configuredUrl = "baseUrl" in provider ? provider.baseUrl : undefined
+  const upstreamUrl = configuredUrl
+    ? new URL(configuredUrl).href.replace(/\/$/, "")
+    : "default"
+  return {
+    upstreamKey: `${provider.type}:${upstreamUrl}`,
+    upstreamUrl,
+  }
+}
+
 export function resolveProviderRefreshSchedules(config: NormalizedConfig): ProviderRefreshSchedule[] {
   const globalInterval = config.refresh?.intervalSeconds
-  const byProvider = new Map<string, ProviderRefreshSchedule>()
+  const byProvider = new Map<string, AccountSchedule>()
 
   for (const subscription of config.subscriptions.values()) {
     const intervalSeconds = subscription.refresh?.intervalSeconds ?? globalInterval
@@ -65,9 +88,35 @@ export function resolveProviderRefreshSchedules(config: NormalizedConfig): Provi
     }
   }
 
-  return [...byProvider.values()].sort((a, b) =>
-    a.providerAccountId.localeCompare(b.providerAccountId),
-  )
+  const byUpstream = new Map<string, ProviderRefreshSchedule>()
+  for (const account of byProvider.values()) {
+    const provider = config.providers.get(account.providerAccountId)
+    if (provider === undefined) continue
+    const { upstreamKey, upstreamUrl } = providerUpstream(provider)
+    const current = byUpstream.get(upstreamKey)
+    if (current === undefined) {
+      byUpstream.set(upstreamKey, {
+        upstreamKey,
+        providerType: provider.type,
+        upstreamUrl,
+        providerAccountIds: [account.providerAccountId],
+        intervalSeconds: account.intervalSeconds,
+        subscriptionIds: [...account.subscriptionIds],
+      })
+      continue
+    }
+    current.intervalSeconds = Math.min(current.intervalSeconds, account.intervalSeconds)
+    current.providerAccountIds.push(account.providerAccountId)
+    current.subscriptionIds.push(...account.subscriptionIds)
+  }
+
+  return [...byUpstream.values()]
+    .map((schedule) => ({
+      ...schedule,
+      providerAccountIds: schedule.providerAccountIds.sort(),
+      subscriptionIds: schedule.subscriptionIds.sort(),
+    }))
+    .sort((a, b) => a.upstreamKey.localeCompare(b.upstreamKey))
 }
 
 export function createRefreshScheduler(deps: RefreshSchedulerDeps): RefreshScheduler {
@@ -83,30 +132,32 @@ export function createRefreshScheduler(deps: RefreshSchedulerDeps): RefreshSched
   function arm(schedule: ProviderRefreshSchedule): void {
     if (!started) return
     const handle = setTimer(() => {
-      timers.delete(schedule.providerAccountId)
+      timers.delete(schedule.upstreamKey)
       void run(schedule)
     }, schedule.intervalSeconds * 1000)
     if (typeof handle === "object" && handle !== null && "unref" in handle) {
       ;(handle as { unref(): void }).unref()
     }
-    timers.set(schedule.providerAccountId, handle)
+    timers.set(schedule.upstreamKey, handle)
   }
 
   async function run(schedule: ProviderRefreshSchedule): Promise<void> {
     if (!started) return
     logger.info("refresh.scheduler.tick", {
-      providerAccountId: schedule.providerAccountId,
+      upstreamKey: schedule.upstreamKey,
+      providerAccountIds: schedule.providerAccountIds,
       intervalSeconds: schedule.intervalSeconds,
       subscriptionIds: schedule.subscriptionIds,
     })
     try {
       await deps.refreshService.refreshProviderAccounts(
-        [schedule.providerAccountId],
+        schedule.providerAccountIds,
         "scheduler",
       )
     } catch (error) {
       logger.error("refresh.scheduler.failed", {
-        providerAccountId: schedule.providerAccountId,
+        upstreamKey: schedule.upstreamKey,
+        providerAccountIds: schedule.providerAccountIds,
         error,
       })
     } finally {

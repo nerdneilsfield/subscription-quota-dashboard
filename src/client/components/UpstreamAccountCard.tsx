@@ -43,7 +43,12 @@ function QuotaRow({ metric, now }: { metric: DashboardMetric; now: Date }) {
   if (metric.display.module === "manual-status-card") return <StatusRow metric={metric} />
   const used = metric.used
   const percent = metric.percentUsed ?? (metric.limit && used !== undefined ? (used / metric.limit) * 100 : undefined)
-  const remaining = metric.remaining ?? (percent !== undefined ? Math.max(0, 100 - percent) : undefined)
+  const remaining = metric.remaining
+    ?? (metric.limit !== undefined && used !== undefined
+      ? Math.max(0, metric.limit - used)
+      : metric.unit === "%" && percent !== undefined
+        ? Math.max(0, 100 - percent)
+        : undefined)
   const remainingPercent = remaining !== undefined && metric.limit && metric.limit > 0
     ? (remaining / metric.limit) * 100
     : remaining !== undefined && metric.unit === "%" ? remaining : undefined

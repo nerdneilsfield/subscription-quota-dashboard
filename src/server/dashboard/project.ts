@@ -406,6 +406,8 @@ function buildDashboardMetric(
     used = 0
   } else if (used === undefined && limit !== undefined && remaining !== undefined) {
     used = Math.max(0, limit - remaining)
+  } else if (remaining === undefined && limit !== undefined && used !== undefined) {
+    remaining = Math.max(0, limit - used)
   }
 
   let percentUsed: number | undefined

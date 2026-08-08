@@ -9,9 +9,10 @@ import { useI18n } from "../i18n"
 interface SubscriptionCardProps {
   subscription: DashboardSubscription
   now: Date
+  onOpenHistory?: (subscription: DashboardSubscription) => void
 }
 
-export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
+export function SubscriptionCard({ subscription, now, onOpenHistory }: SubscriptionCardProps) {
   const { t } = useI18n()
   const unavailable = subscription.status === "unavailable"
   const stale = subscription.status === "stale"
@@ -50,6 +51,12 @@ export function SubscriptionCard({ subscription, now }: SubscriptionCardProps) {
         </div>
       )}</>}
       {isUpstreamAccount && subscription.errors?.map((err, i) => <ErrorBanner key={i} error={err} stale={stale} />)}
+      {onOpenHistory && hasMetrics && (
+        <button type="button" className="subscription-card__history-trigger" onClick={() => onOpenHistory(subscription)} aria-haspopup="dialog">
+          <span aria-hidden="true">↗</span>
+          {t("viewUsageHistory")}
+        </button>
+      )}
     </section>
   )
 }

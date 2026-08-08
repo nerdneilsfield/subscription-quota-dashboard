@@ -6,6 +6,7 @@ import { join, extname } from "node:path"
 import { randomUUID } from "node:crypto"
 import type { NormalizedConfig } from "../../shared/domain"
 import type { RangeKey } from "../../shared/domain"
+import type { SubscriptionHistoryPayload, SubscriptionHistoryPoint } from "../../shared/subscription-history"
 import type { DashboardStorage } from "../storage/repositories"
 import type { ProviderAdapter } from "../providers/types"
 import {
@@ -47,6 +48,12 @@ export type AppDeps = {
 
 const VALID_RANGES: ReadonlySet<string> = new Set(["1h", "24h", "7d", "30d"])
 const DEFAULT_RANGE: RangeKey = "24h"
+const RANGE_MS: Record<RangeKey, number> = {
+  "1h": 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000,
+}
 const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 const CONTENT_TYPES: Record<string, string> = {
   ".js": "text/javascript",
@@ -372,6 +379,63 @@ export function createApp(deps?: AppDeps): Hono<{ Variables: AppVariables }> {
       subscriptionCount: payload.subscriptions.length,
     })
     return c.json(payload, 200)
+  })
+
+  // --- GET /api/dashboard/:profileId/subscriptions/:subscriptionId/history ---
+  // Snapshot rows are loaded only when a subscription detail dialog opens;
+  // the dashboard payload therefore stays small even for 30-day ranges.
+  app.get("/api/dashboard/:profileId/subscriptions/:subscriptionId/history", (c) => {
+    const profileId = c.req.param("profileId")
+    const authFail = authenticate(c, profileId)
+    if (authFail !== null) return authFail
+
+    const parsed = resolveRangeParam(new URL(c.req.url))
+    if (!parsed.ok) return c.json({ error: "invalid range" }, 400)
+
+    const subscriptionId = c.req.param("subscriptionId")
+    const dashboard = refreshService.getPayload(profileId, parsed.range)
+    const subscription = dashboard.subscriptions.find((item) => item.id === subscriptionId)
+    if (!subscription) return c.json({ error: "not found" }, 404)
+
+    const rangeEnd = dashboard.generatedAt
+    const rangeStart = new Date(Date.parse(rangeEnd) - RANGE_MS[parsed.range]).toISOString()
+    const result: SubscriptionHistoryPayload = {
+      subscription: { id: subscription.id, name: subscription.name },
+      range: parsed.range,
+      generatedAt: dashboard.generatedAt,
+      metrics: subscription.metrics.map((metric) => ({
+        id: metric.id,
+        label: metric.label,
+        unit: metric.unit,
+        points: deps.storage.snapshots.listForMetric(metric.metricKey, rangeStart, rangeEnd).map((row) => {
+          const limit = row.limit ?? metric.limit
+          const used = row.used ?? (limit !== undefined && row.remaining !== undefined
+            ? Math.max(0, limit - row.remaining)
+            : undefined)
+          const remaining = row.remaining ?? (limit !== undefined && used !== undefined
+            ? Math.max(0, limit - used)
+            : undefined)
+          const point: SubscriptionHistoryPoint = {
+            timestamp: row.timestamp,
+            sourceValueKind: row.sourceValueKind,
+          }
+          if (row.authoritativeValue !== undefined) point.authoritativeValue = row.authoritativeValue
+          if (used !== undefined) point.used = used
+          if (remaining !== undefined) point.remaining = remaining
+          if (limit !== undefined) point.limit = limit
+          if (limit !== undefined && limit > 0 && used !== undefined) point.percentUsed = (used / limit) * 100
+          return point
+        }),
+      })),
+    }
+    c.get("requestLogger").debug("dashboard.subscription_history.served", {
+      profileId,
+      subscriptionId,
+      range: parsed.range,
+      metricCount: result.metrics.length,
+      pointCount: result.metrics.reduce((sum, metric) => sum + metric.points.length, 0),
+    })
+    return c.json(result, 200)
   })
 
   // --- POST /api/dashboard/:profileId/refresh ---

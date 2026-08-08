@@ -8,6 +8,7 @@
 
 import type { DashboardPayload } from "../shared/dashboard-payload"
 import type { RangeKey } from "../shared/domain"
+import type { SubscriptionHistoryPayload } from "../shared/subscription-history"
 
 export type ApiErrorCode = "unauthorized" | "rate-limited" | "not-found" | "network" | "server"
 export type ApiResult<T> =
@@ -115,6 +116,24 @@ export async function getDashboard(
       range,
     )
     return await mapResponse<DashboardPayload>(res)
+  } catch (err) {
+    return mapError(err, signal)
+  }
+}
+
+export async function getSubscriptionHistory(
+  profileId: string,
+  subscriptionId: string,
+  range: RangeKey,
+  signal?: AbortSignal,
+): Promise<ApiResult<SubscriptionHistoryPayload>> {
+  try {
+    const res = await request(
+      `/api/dashboard/${encodeURIComponent(profileId)}/subscriptions/${encodeURIComponent(subscriptionId)}/history`,
+      { ...(signal !== undefined ? { signal } : {}) },
+      range,
+    )
+    return await mapResponse<SubscriptionHistoryPayload>(res)
   } catch (err) {
     return mapError(err, signal)
   }

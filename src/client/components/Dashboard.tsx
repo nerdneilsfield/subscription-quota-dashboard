@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import type { DashboardPayload } from "../../shared/dashboard-payload"
+import type { DashboardPayload, DashboardSubscription } from "../../shared/dashboard-payload"
 import type { RangeKey } from "../../shared/domain"
 import { getDashboard, refreshDashboard } from "../api"
 import type { ApiResult } from "../api"
@@ -14,6 +14,7 @@ import { SubscriptionCard } from "./SubscriptionCard"
 import { RangeSwitch } from "./RangeSwitch"
 import { TimeDisplay } from "./TimeDisplay"
 import { LanguageSwitch } from "./LanguageSwitch"
+import { SubscriptionHistoryDialog } from "./SubscriptionHistoryDialog"
 import { getApiErrorMessage, useI18n } from "../i18n"
 
 const VISIBILITY_REFETCH_MS = 5 * 60 * 1000
@@ -54,6 +55,7 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
   const rangeLoadingRef = useRef(rangeLoading)
   rangeLoadingRef.current = rangeLoading
   const [refresh, setRefresh] = useState<RefreshState>({ state: "idle" })
+  const [historySubscription, setHistorySubscription] = useState<DashboardSubscription>()
   // Ref mirror of refresh.state so fetchRange can read it without depending
   // on it (which would cause the range effect to re-run on every refresh state change).
   const refreshStateRef = useRef(refresh.state)
@@ -338,7 +340,7 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
             </div>
             <div className="subscriptions-grid subscriptions-grid--upstream">
               {upstreamSubscriptions.map((s) => (
-                <SubscriptionCard key={s.id} subscription={s} now={now} />
+                <SubscriptionCard key={s.id} subscription={s} now={now} onOpenHistory={setHistorySubscription} />
               ))}
             </div>
           </section>}
@@ -349,7 +351,7 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
             </div>
             <div className="subscriptions-grid subscriptions-grid--direct">
               {directSubscriptions.map((s) => (
-                <SubscriptionCard key={s.id} subscription={s} now={now} />
+                <SubscriptionCard key={s.id} subscription={s} now={now} onOpenHistory={setHistorySubscription} />
               ))}
             </div>
           </section>}
@@ -363,6 +365,14 @@ export function Dashboard({ profileId, range, initialPayload, onSessionExpired, 
           <span>{t("generated")} <TimeDisplay iso={payload.generatedAt} now={now} /></span>
         </p>
       </footer>
+      {historySubscription && (
+        <SubscriptionHistoryDialog
+          profileId={profileId}
+          subscription={historySubscription}
+          onClose={() => setHistorySubscription(undefined)}
+          {...(onSessionExpired ? { onSessionExpired } : {})}
+        />
+      )}
     </div>
   )
 }

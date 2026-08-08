@@ -1005,6 +1005,80 @@ test("dynamic subscription projection produces metrics with synthetic config", (
   expect(xai.metrics[0]!.status).toBe("ok")
 })
 
+test("deduplicates the same discovered account across upstreams", () => {
+  const config = makeConfig({
+    providers: [
+      { id: "cp-a", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+      { id: "cp-b", type: "cliproxy", baseUrl: "http://localhost:8318", apiKey: "k" },
+    ],
+    subscriptions: [],
+    profiles: [{
+      id: "self", name: "Personal", viewKey: "k", subscriptionIds: [],
+      dynamicProviderIds: ["cp-a", "cp-b"],
+    }],
+  })
+  const dynamicSubscriptions = new Map([
+    ["cp-a", [{
+      id: "cliproxy:codex:first", name: "Codex", providerMetricIds: ["codex:first:five_hour"],
+      identity: { provider: "codex", providerLabel: "Codex", account: "Alice@Example.com", transport: "CLIProxy" },
+    }]],
+    ["cp-b", [{
+      id: "cliproxy:codex:second", name: "Codex", providerMetricIds: ["codex:second:five_hour"],
+      identity: { provider: "codex", providerLabel: "Codex", account: "alice@example.com", transport: "CLIProxy" },
+    }]],
+  ])
+  const metric = (providerMetricId: string): NormalizedMetric => ({
+    providerMetricId, label: "5h", unit: "%", used: 20, limit: 100,
+    sourceValueKind: "gauge-used", sourceConfidence: "known",
+  })
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW, selectedRange: "24h",
+    providers: [
+      { providerAccountId: "cp-a", metrics: [metric("codex:first:five_hour")], cache: okCache },
+      { providerAccountId: "cp-b", metrics: [metric("codex:second:five_hour")], cache: okCache },
+    ],
+    dynamicSubscriptions,
+  })
+
+  expect(payload.subscriptions).toHaveLength(1)
+  expect(payload.subscriptions[0]!.identity?.account).toBe("Alice@Example.com")
+})
+
+test("deduplicates a discovered account already configured locally", () => {
+  const config = makeConfig({
+    providers: [
+      { id: "zhipu-local", type: "zhipu", apiKey: "k" },
+      { id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+    ],
+    subscriptions: [{
+      id: "local-alice", name: "alice@example.com", providerId: "zhipu-local",
+      metrics: [{ id: "five_hour", label: "5h", unit: "%", display: { module: "period-quota-card" } }],
+    }],
+    profiles: [{
+      id: "self", name: "Personal", viewKey: "k", subscriptionIds: ["local-alice"], dynamicProviderIds: ["cp"],
+    }],
+  })
+  const dynamicSubscriptions = new Map([["cp", [{
+    id: "cliproxy:zhipu:remote", name: "Zhipu", providerMetricIds: ["zhipu:remote:five_hour"],
+    identity: { provider: "zhipu", providerLabel: "Zhipu", account: "Alice@Example.com", transport: "CLIProxy" },
+  }]]])
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW, selectedRange: "24h",
+    providers: [{
+      providerAccountId: "cp",
+      metrics: [{
+        providerMetricId: "zhipu:remote:five_hour", label: "5h", unit: "%", used: 20, limit: 100,
+        sourceValueKind: "gauge-used", sourceConfidence: "known",
+      }],
+      cache: okCache,
+    }],
+    dynamicSubscriptions,
+  })
+
+  expect(payload.subscriptions).toHaveLength(1)
+  expect(payload.subscriptions[0]!.id).toBe("local-alice")
+})
+
 test("dynamic metrics excluded from summary groups", () => {
   const config = makeConfig({
     providers: [

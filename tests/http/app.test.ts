@@ -16,6 +16,7 @@ import type {
   ProviderRefreshResult,
 } from "../../src/server/providers/types"
 import { createManualProvider } from "../../src/server/providers/manual"
+import { buildMetricKey } from "../../src/shared/metric-key"
 
 const NOW_MS = Date.parse("2026-06-25T12:00:00.000Z")
 const NOW_ISO = "2026-06-25T12:00:00.000Z"
@@ -147,6 +148,37 @@ test("/health returns 503 when injected storage healthCheck fails", async () => 
   const app = createApp(makeDeps({ storage: unhealthy }))
   const res = await app.request("/health")
   expect(res.status).toBe(503)
+})
+
+test("GET subscription history returns on-demand snapshot series for visible metric", async () => {
+  const storage = makeStorage()
+  const metricKey = buildMetricKey("poe-main", "poe-api", "points")
+  storage.snapshots.insertMany([
+    {
+      providerAccountId: "poe-main", subscriptionId: "poe-api", metricId: "points", metricKey,
+      timestamp: "2026-06-25T10:00:00.000Z", source: "provider", sourceValueKind: "gauge-remaining",
+      remaining: 800_000, limit: 1_000_000,
+    },
+    {
+      providerAccountId: "poe-main", subscriptionId: "poe-api", metricId: "points", metricKey,
+      timestamp: "2026-06-25T12:00:00.000Z", source: "provider", sourceValueKind: "gauge-remaining",
+      remaining: 750_000, limit: 1_000_000,
+    },
+  ])
+  const app = createApp(makeDeps({ storage }))
+  const res = await app.request("/api/dashboard/self/subscriptions/poe-api/history?range=24h", { headers: authHeaders() })
+  expect(res.status).toBe(200)
+  const body = await res.json() as { subscription: { id: string }; metrics: Array<{ points: Array<{ used: number; percentUsed: number }> }> }
+  expect(body.subscription.id).toBe("poe-api")
+  expect(body.metrics[0]?.points).toHaveLength(2)
+  expect(body.metrics[0]?.points[0]?.used).toBe(200_000)
+  expect(body.metrics[0]?.points[1]?.percentUsed).toBe(25)
+})
+
+test("GET subscription history rejects subscriptions outside profile", async () => {
+  const app = createApp(makeDeps())
+  const res = await app.request("/api/dashboard/self/subscriptions/not-visible/history?range=24h", { headers: authHeaders() })
+  expect(res.status).toBe(404)
 })
 
 // --- Route: POST /api/session/:profileId ---

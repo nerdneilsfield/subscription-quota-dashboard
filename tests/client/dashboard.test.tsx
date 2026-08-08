@@ -134,6 +134,7 @@ type RespFn = (call: number, url: string, init?: RequestInit) => RespSpec | Prom
 interface ApiMock {
   session?: RespFn
   dashboard?: RespFn
+  history?: RespFn
   refresh?: RespFn
 }
 
@@ -148,6 +149,7 @@ function installApi(mock: ApiMock) {
     const choose = (): RespFn | undefined => {
       if (method === "POST" && url.includes("/api/session/")) return mock.session
       if (method === "POST" && url.includes("/refresh")) return mock.refresh
+      if (method === "GET" && url.includes("/history")) return mock.history
       if (method === "GET" && url.includes("/api/dashboard/")) return mock.dashboard
       return undefined
     }
@@ -816,6 +818,37 @@ test("visibility return within 5 minutes does not refetch", async () => {
   } finally {
     Date.now = realNow
   }
+})
+
+test("subscription usage history opens on demand, renders chart, switches range, and closes with Escape", async () => {
+  installApi({
+    dashboard: defaultDashboard(),
+    history: (_call, url) => ({
+      status: 200,
+      body: {
+        subscription: { id: "poe-api", name: "Poe API" },
+        range: url.includes("range=7d") ? "7d" : "24h",
+        generatedAt: NOW_ISO,
+        metrics: [{
+          id: "points", label: "API points", unit: "points",
+          points: [
+            { timestamp: PAST_3H, sourceValueKind: "gauge-remaining", used: 100_000, remaining: 900_000, limit: 1_000_000, percentUsed: 10 },
+            { timestamp: NOW_ISO, sourceValueKind: "gauge-remaining", used: 200_000, remaining: 800_000, limit: 1_000_000, percentUsed: 20 },
+          ],
+        }],
+      },
+    }),
+  })
+  renderApp("/d/self")
+  await waitFor(() => expect(screen().getByRole("heading", { level: 1, name: "Personal" })).toBeTruthy())
+  fireEvent.click(screen().getAllByRole("button", { name: /Usage history|用量趋势/ })[0]!)
+  const dialog = await waitFor(() => screen().getByRole("dialog"))
+  await waitFor(() => expect(within(dialog).getByRole("img", { name: /API points/ })).toBeTruthy())
+  expect(calls.some((call) => call.url.includes("/subscriptions/poe-api/history") && call.url.includes("range=24h"))).toBe(true)
+  fireEvent.click(within(dialog).getByRole("button", { name: "7d" }))
+  await waitFor(() => expect(calls.some((call) => call.url.includes("/history") && call.url.includes("range=7d"))).toBe(true))
+  fireEvent.keyDown(document, { key: "Escape" })
+  await waitFor(() => expect(screen().queryByRole("dialog")).toBeNull())
 })
 
 // Guard against an unused helper warning.

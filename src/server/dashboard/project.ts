@@ -331,13 +331,27 @@ function buildSubscriptions(
 ): DashboardSubscription[] {
   const bySub = new Map<string, ProjectedMetric[]>()
   for (const p of projected) {
-    const arr = bySub.get(p.subscriptionId) ?? []
+    // Dynamic subscription ids are only unique inside one provider account.
+    // Keep sources separate here; deduplication below intentionally retains
+    // one whole source instead of accidentally merging its metrics.
+    const sourceKey = `${p.providerAccountId}\u0000${p.subscriptionId}`
+    const arr = bySub.get(sourceKey) ?? []
     arr.push(p)
-    bySub.set(p.subscriptionId, arr)
+    bySub.set(sourceKey, arr)
   }
+
+  const groups = Array.from(bySub.values())
+  const knownAccountAliases = new Set(
+    groups.flatMap((metrics) => identityAccountAliases(metrics[0]!)),
+  )
+  const seenAliases = new Set<string>()
   const subs: DashboardSubscription[] = []
-  for (const [subId, metrics] of bySub) {
+  for (const metrics of groups) {
     const first = metrics[0]!
+    const aliases = subscriptionAliases(first, metrics, knownAccountAliases)
+    if (aliases.some((alias) => seenAliases.has(alias))) continue
+    for (const alias of aliases) seenAliases.add(alias)
+
     const dashboardMetrics = metrics.map((m) => buildDashboardMetric(m, generatedAt, selectedRange))
     const subscriptionStatuses: MetricStatus[] = dashboardMetrics.map((m) => m.status)
     // Spec ~918: subscription status escalates from metric statuses AND
@@ -350,7 +364,7 @@ function buildSubscriptions(
     }
     const subscriptionStatus = highestStatus(subscriptionStatuses)
     const sub: DashboardSubscription = {
-      id: subId,
+      id: first.subscriptionId,
       name: first.subscriptionName,
       status: subscriptionStatus,
       metrics: dashboardMetrics,
@@ -363,6 +377,57 @@ function buildSubscriptions(
     subs.push(sub)
   }
   return subs
+}
+
+function subscriptionAliases(
+  first: ProjectedMetric,
+  metrics: ProjectedMetric[],
+  knownAccountAliases: Set<string>,
+): string[] {
+  const aliases = new Set<string>(identityAccountAliases(first))
+  const provider = subscriptionProvider(first)
+
+  // auth_index is stable enough to collapse duplicate discovery entries and
+  // identical accounts exposed by two configurations of the same upstream.
+  if (provider) {
+    for (const metric of metrics) {
+      const authIndex = cliproxyAuthIndex(metric.providerMetricId, provider)
+      if (authIndex) aliases.add(`auth:${provider}:${normalizeAccount(authIndex)}`)
+    }
+
+    // Static subscriptions have no identity field. Match their configured
+    // name only when a discovered account explicitly reports that same label;
+    // this avoids collapsing unrelated generic names such as "Codex".
+    if (!first.subscriptionIdentity?.account) {
+      const configuredAlias = `account:${provider}:${normalizeAccount(first.subscriptionName)}`
+      if (knownAccountAliases.has(configuredAlias)) aliases.add(configuredAlias)
+    }
+  }
+
+  return Array.from(aliases)
+}
+
+function identityAccountAliases(metric: ProjectedMetric): string[] {
+  const account = metric.subscriptionIdentity?.account
+  const provider = subscriptionProvider(metric)
+  if (!account || !provider) return []
+  return [`account:${provider}:${normalizeAccount(account)}`]
+}
+
+function subscriptionProvider(metric: ProjectedMetric): string | undefined {
+  if (metric.subscriptionIdentity?.provider) return normalizeAccount(metric.subscriptionIdentity.provider)
+  if (metric.providerType !== "cliproxy") return normalizeAccount(metric.providerType)
+  return metric.providerMetricId.split(":", 1)[0]?.trim().toLowerCase() || undefined
+}
+
+function cliproxyAuthIndex(providerMetricId: string, provider: string): string | undefined {
+  const [metricProvider, authIndex] = providerMetricId.split(":", 3)
+  if (!metricProvider || !authIndex || normalizeAccount(metricProvider) !== provider) return undefined
+  return authIndex
+}
+
+function normalizeAccount(value: string): string {
+  return value.normalize("NFKC").trim().toLowerCase()
 }
 
 function collectSubscriptionErrors(

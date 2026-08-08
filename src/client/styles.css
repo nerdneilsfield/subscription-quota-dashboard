@@ -442,13 +442,23 @@ button { cursor: pointer; }
 }
 @media (max-width: 47.999rem) {
   .dashboard__header { grid-template-columns: minmax(0, 1fr); }
-  .btn-refresh { width: 100%; min-height: 3.5rem; }
-  .dashboard__telemetry { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dashboard__telemetry > div { border-bottom: var(--rule-hairline) solid var(--color-rule); }
-  .dashboard__telemetry > div:nth-child(even) { border-inline-end: 0; }
-  .dashboard__title { display: grid; align-items: start; }
-  .dashboard__title h1 { font-size: var(--text-2xl); }
-  .system-state { margin: 0; }
+  .dashboard__identity { padding: var(--space-sm); }
+  .dashboard__wordmark { margin-block-end: var(--space-xs); }
+  .dashboard__title { align-items: center; justify-content: space-between; }
+  .dashboard__title h1 { font-size: var(--text-xl); }
+  .system-state { margin: 0; font-size: var(--text-2xs); }
+  .dashboard__controls { display: grid; grid-template-columns: auto auto minmax(0, 1fr); min-height: 0; }
+  .profile-switch { grid-column: 1 / -1; min-height: 3rem; padding-inline: var(--space-xs); }
+  .dashboard__controls > .btn-session { min-height: 3rem; margin: 0; border-block: 0; border-inline-start: 0; border-radius: 0; padding-inline: var(--space-xs); }
+  .dashboard__controls .language-switch { width: 100%; min-width: 0; min-height: 3rem; justify-content: flex-end; margin: 0; padding: var(--space-3xs) var(--space-xs); border-inline-start: var(--rule-hairline) solid var(--color-rule-2); }
+  .dashboard__controls .language-switch__label { display: none; }
+  .btn-refresh { grid-column: 1 / -1; width: 100%; min-height: 3rem; }
+  .dashboard__telemetry { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .dashboard__telemetry > div { min-width: 0; padding: var(--space-xs) var(--space-3xs); text-align: center; }
+  .dashboard__telemetry > div:nth-child(-n + 3) { border-bottom: var(--rule-hairline) solid var(--color-rule); }
+  .dashboard__telemetry > div:nth-child(3) { border-inline-end: 0; }
+  .dashboard__telemetry dt { font-size: var(--text-2xs); line-height: 1.2; }
+  .dashboard__telemetry dd { font-size: var(--text-md); }
   .dashboard__range-rail { display: grid; padding-inline-end: 0; }
   .range-switch { overflow-x: auto; scrollbar-width: none; }
   .range-switch::-webkit-scrollbar { display: none; }

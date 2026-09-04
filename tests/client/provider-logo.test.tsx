@@ -39,3 +39,11 @@ test.each([
   expect(logo.tagName).toBe("IMG")
   expect(logo.closest("span")?.classList.contains(`provider-logo--${key}`)).toBe(true)
 })
+
+test.each(["MiniMax Coding Plan", "MiniMax"])("renders cached MiniMax image for %s", (label) => {
+  const { container } = render(<ProviderLogo label={label} />)
+  const logo = within(container).getByRole("img", { name: `${label} logo` })
+
+  expect(logo.tagName).toBe("IMG")
+  expect(logo.closest("span")?.classList.contains("provider-logo--minimax")).toBe(true)
+})

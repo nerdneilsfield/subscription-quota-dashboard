@@ -81,6 +81,31 @@ const config: DashboardConfigInput = {
         },
       ],
     },
+    // {
+    //   id: "minimax-coding-plan",
+    //   name: "MiniMax Coding Plan",
+    //   providerId: "minimax-main",
+    //   metrics: [
+    //     {
+    //       id: "five-hour",
+    //       providerMetricId: "five_hour",
+    //       label: "5h quota",
+    //       unit: "%",
+    //       sourceValueKind: "gauge-remaining",
+    //       window: { kind: "rolling", duration: "5h" },
+    //       display: { module: "period-quota-card" },
+    //     },
+    //     {
+    //       id: "weekly",
+    //       providerMetricId: "weekly_limit",
+    //       label: "Weekly quota",
+    //       unit: "%",
+    //       sourceValueKind: "gauge-remaining",
+    //       window: { kind: "rolling", duration: "7d" },
+    //       display: { module: "period-quota-card" },
+    //     },
+    //   ],
+    // },
     {
       id: "mimo-token-plan",
       name: "Xiaomi MiMo Token Plan",

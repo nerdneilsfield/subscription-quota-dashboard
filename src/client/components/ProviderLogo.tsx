@@ -3,6 +3,7 @@ import mimoLogo from "../assets/xiaomi-mimo.png"
 import doubaoLogo from "../assets/doubao.png"
 import zhipuLogo from "../assets/zhipu.png"
 import kimiLogo from "../assets/kimi.png"
+import minimaxLogo from "../assets/minimax.png"
 
 interface ProviderLogoProps {
   provider?: string
@@ -41,6 +42,7 @@ function normalizeProvider(value: string): string {
   if (normalized.includes("doubao") || normalized.includes("volcengine")) return "doubao"
   if (normalized.includes("zhipu") || normalized.includes("bigmodel") || normalized.includes("glm")) return "zhipu"
   if (normalized.includes("kimi") || normalized.includes("moonshot")) return "kimi"
+  if (normalized.includes("minimax") || normalized.includes("minimaxi")) return "minimax"
   return "fallback"
 }
 
@@ -61,4 +63,5 @@ const LOGOS: Record<string, LogoDefinition> = {
   doubao: { kind: "image", src: doubaoLogo },
   zhipu: { kind: "image", src: zhipuLogo },
   kimi: { kind: "image", src: kimiLogo },
+  minimax: { kind: "image", src: minimaxLogo },
 }

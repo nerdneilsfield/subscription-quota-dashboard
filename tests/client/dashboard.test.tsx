@@ -706,6 +706,8 @@ test("partial refresh success with stale provider error returns to idle and show
 // Range switch
 // =====================================================================
 
+// Full-app double render through happy-dom exceeds bun's 5s default on 2-core
+// CI runners; the generous timeout guards runner noise, not real hangs.
 test("range switch updates query string, calls getDashboard, keeps shell with range-stat skeletons", async () => {
   let release: () => void = () => {}
   const block = new Promise<void>((r) => { release = r })
@@ -736,7 +738,7 @@ test("range switch updates query string, calls getDashboard, keeps shell with ra
   }, { timeout: 2000 })
   release()
   await waitFor(() => expect(document.querySelector("[data-range-skeleton]")).toBeNull())
-})
+}, 30_000)
 
 test("stale aborted range response does not overwrite newer range state", async () => {
   const payload1h: DashboardPayload = { ...richPayload(), profile: { id: "self", name: "Range1h" } }

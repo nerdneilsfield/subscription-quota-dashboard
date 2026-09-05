@@ -47,3 +47,27 @@ test.each(["MiniMax Coding Plan", "MiniMax"])("renders cached MiniMax image for 
   expect(logo.tagName).toBe("IMG")
   expect(logo.closest("span")?.classList.contains("provider-logo--minimax")).toBe(true)
 })
+
+test.each([
+  ["DeepSeek", "deepseek"],
+  ["StepFun", "stepfun"],
+  ["OpenRouter", "openrouter"],
+  ["Novita", "novita"],
+])("renders cached provider image for %s", (label, key) => {
+  const { container } = render(<ProviderLogo label={label} />)
+  const logo = within(container).getByRole("img", { name: `${label} logo` })
+
+  expect(logo.tagName).toBe("IMG")
+  expect(logo.closest("span")?.classList.contains(`provider-logo--${key}`)).toBe(true)
+})
+
+test.each([
+  ["SiliconFlow", "0 0 53.02 25.36", "provider-logo--siliconflow"],
+  ["ZenMux", "0 0 160 160", "provider-logo--zenmux"],
+])("renders cached brand mark for %s", (label, viewBox, className) => {
+  const { container } = render(<ProviderLogo label={label} />)
+  const logo = within(container).getByRole("img", { name: `${label} logo` })
+
+  expect(logo.getAttribute("viewBox")).toBe(viewBox)
+  expect(logo.closest("span")?.classList.contains(className)).toBe(true)
+})

@@ -21,6 +21,7 @@ import { createVolcengineProvider } from "./providers/volcengine"
 import { createCliproxyProvider } from "./providers/cliproxy"
 import { createOpenCodeGoProvider } from "./providers/opencode-go"
 import { createMiMoTokenPlanProvider } from "./providers/mimo-token-plan"
+import { createCommandCodeProvider } from "./providers/command-code"
 import type { ProviderAdapter } from "./providers/types"
 import { resolveSessionSecret } from "./auth/session"
 import { parseTrustedProxies } from "./http/client-ip"
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
     ["zenmux", createZenmuxProvider(loggedFetch)],
     ["volcengine", createVolcengineProvider(loggedFetch)],
     ["mimo-token-plan", createMiMoTokenPlanProvider(loggedFetch)],
+    ["command-code", createCommandCodeProvider(loggedFetch)],
     ["opencode-go", createOpenCodeGoProvider(loggedFetch)],
     ["cliproxy", createCliproxyProvider(loggedFetch)],
   ])

@@ -54,6 +54,7 @@ export type ProviderAccountConfig =
   | { id: string; type: "zenmux"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
   | { id: string; type: "volcengine"; region?: string | undefined; akEnv?: string | undefined; ak?: string | undefined; skEnv?: string | undefined; sk?: string | undefined }
   | { id: string; type: "mimo-token-plan"; sessionCookieEnv?: string | undefined; sessionCookie?: string | undefined }
+  | { id: string; type: "command-code"; sessionCookieEnv?: string | undefined; sessionCookie?: string | undefined }
   | { id: string; type: "opencode-go"; workspaceIdEnv?: string | undefined; workspaceId?: string | undefined; authCookieEnv?: string | undefined; authCookie?: string | undefined }
   | { id: string; type: "cliproxy"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined; queryProviders?: string[] | undefined }
 

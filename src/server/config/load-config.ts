@@ -87,10 +87,11 @@ function resolveOpenCodeCredential(provider: Extract<ProviderAccountConfig, { ty
   return { available: true, workspaceId: workspace.apiKey, authCookie: cookie.apiKey }
 }
 
-function resolveMiMoCredential(provider: Extract<ProviderAccountConfig, { type: "mimo-token-plan" }>): ProviderRuntimeState {
+function resolveSessionCookieCredential(provider: Extract<ProviderAccountConfig, { type: "mimo-token-plan" | "command-code" }>): ProviderRuntimeState {
+  const label = provider.type === "command-code" ? "Command Code" : "MiMo"
   const cookie = resolveBearerCredential({ apiKeyEnv: provider.sessionCookieEnv, apiKey: provider.sessionCookie })
-  if (cookie.apiKey === undefined) return { available: false, reason: cookie.reason ?? "missing MiMo session cookie" }
-  if (/\r|\n/.test(cookie.apiKey)) return { available: false, reason: "MiMo session cookie contains invalid newline characters" }
+  if (cookie.apiKey === undefined) return { available: false, reason: cookie.reason ?? `missing ${label} session cookie` }
+  if (/\r|\n/.test(cookie.apiKey)) return { available: false, reason: `${label} session cookie contains invalid newline characters` }
   return { available: true, authCookie: cookie.apiKey }
 }
 
@@ -320,9 +321,9 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
           : { available: false, reason: reason ?? "missing AK or SK" }
       providers.set(provider.id, { ...provider, region })
       providerRuntime.set(provider.id, state)
-    } else if (provider.type === "mimo-token-plan") {
+    } else if (provider.type === "mimo-token-plan" || provider.type === "command-code") {
       providers.set(provider.id, provider)
-      providerRuntime.set(provider.id, resolveMiMoCredential(provider))
+      providerRuntime.set(provider.id, resolveSessionCookieCredential(provider))
     } else if (provider.type === "opencode-go") {
       providers.set(provider.id, provider)
       providerRuntime.set(provider.id, resolveOpenCodeCredential(provider))

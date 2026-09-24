@@ -6,6 +6,7 @@ const config: DashboardConfigInput = {
   // 0 disables background refresh. Positive values must be >= 30 seconds.
   refresh: { intervalSeconds: Number(process.env.AUTO_REFRESH_INTERVAL_SECONDS ?? 0) },
   providers: [
+    // { id: "command-code-main", type: "command-code", sessionCookieEnv: "COMMAND_CODE_SESSION_COOKIE" },
     {
       id: "poe-main",
       type: "poe",
@@ -31,6 +32,16 @@ const config: DashboardConfigInput = {
       apiKeyEnv: "CLIPROXY_MGMT_KEY" },
   ],
   subscriptions: [
+    // Add "command-code" to the desired profile's subscriptionIds when enabling.
+    // {
+    //   id: "command-code", name: "Command Code", providerId: "command-code-main",
+    //   metrics: [
+    //     { id: "monthly", providerMetricId: "monthly_credits", label: "Monthly credits", unit: "credits", display: { module: "balance-card" } },
+    //     { id: "purchased", providerMetricId: "purchased_credits", label: "Purchased credits", unit: "credits", display: { module: "balance-card" } },
+    //     { id: "five-hour", providerMetricId: "five_hour", label: "5h quota", unit: "credits", display: { module: "period-quota-card" } },
+    //     { id: "weekly", providerMetricId: "weekly", label: "Weekly quota", unit: "credits", display: { module: "period-quota-card" } },
+    //   ],
+    // },
     {
       id: "poe-api",
       name: "Poe API",

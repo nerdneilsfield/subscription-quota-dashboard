@@ -25,7 +25,7 @@ const config: DashboardConfigInput = {
     { id: "volc-main", type: "volcengine", region: "cn-beijing", akEnv: "VOLCENGINE_AK", skEnv: "VOLCENGINE_SK" },
     { id: "mimo-token-main", type: "mimo-token-plan", sessionCookieEnv: "MIMO_SESSION_COOKIE" },
     { id: "opencode-go-main", type: "opencode-go", workspaceIdEnv: "OPENCODE_WORKSPACE_ID", authCookieEnv: "OPENCODE_AUTH_COOKIE" },
-    // --- Dynamic provider (auto-discovers codex/claude/xai accounts) ---
+    // --- Dynamic provider (auto-discovers codex/claude/xai/antigravity accounts) ---
     { id: "cliproxy-main", type: "cliproxy",
       baseUrl: process.env.CLIPROXY_BASE_URL ?? "http://localhost:8317",
       apiKeyEnv: "CLIPROXY_MGMT_KEY" },

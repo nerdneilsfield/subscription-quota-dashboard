@@ -332,7 +332,7 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
       }
       validateBaseUrlSkipLoopback(provider.baseUrl, `${providerPath}.baseUrl`)
       if (provider.queryProviders !== undefined) {
-        const knownProviders = new Set(["codex", "claude", "xai"])
+        const knownProviders = new Set(["codex", "claude", "xai", "antigravity"])
         for (const qp of provider.queryProviders) {
           if (!knownProviders.has(qp)) {
             fail(`${providerPath}.queryProviders`, `unknown provider "${qp}"`)

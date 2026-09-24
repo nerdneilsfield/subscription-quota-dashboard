@@ -10,7 +10,7 @@ import { silentLogger, type Logger } from "../logging/logger"
 // POST /v0/management/api-call -> query upstream quota with $TOKEN$ substitution
 // Sources: cc-switch subscription.rs (Codex/Claude), CPAMP xai_probe.go (Grok)
 
-const DEFAULT_QUERY_PROVIDERS = ["codex", "claude", "xai"]
+const DEFAULT_QUERY_PROVIDERS = ["codex", "claude", "xai", "antigravity"]
 const API_CALL_CONCURRENCY = 6
 const PER_CALL_TIMEOUT_MS = 70_000
 const OVERALL_DEADLINE_MS = 120_000
@@ -21,6 +21,11 @@ type CliproxyProvider = {
 }
 
 type AuthFileEntry = {
+  name?: string
+  project_id?: string
+  projectId?: string
+  metadata?: Record<string, unknown>
+  attributes?: Record<string, unknown>
   auth_index?: string
   provider?: string
   label?: string
@@ -31,6 +36,7 @@ type AuthFileEntry = {
 }
 
 type FilteredAccount = {
+  authFile?: AuthFileEntry
   provider: string
   authIndex: string
   label?: string
@@ -123,6 +129,7 @@ export function createCliproxyProvider(fetchImpl: typeof fetch = fetch): Provide
         // important to surface. Only `disabled:true` is a hard skip.
         if (!a.auth_index || a.auth_index === "") return []
         return [{
+          ...(a.provider === "antigravity" ? { authFile: a } : {}),
           provider: a.provider,
           authIndex: a.auth_index,
           ...(a.label !== undefined ? { label: a.label } : {}),
@@ -305,6 +312,7 @@ const UPSTREAM_LABELS: Record<string, string> = {
   codex: "Codex",
   claude: "Claude",
   xai: "Grok",
+  antigravity: "Antigravity",
 }
 
 function titleCase(value: string): string {
@@ -363,6 +371,8 @@ async function queryAccount(
     return queryClaude(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal, logger)
   } else if (acct.provider === "xai") {
     return queryXai(fetchImpl, baseUrl, mgmtKey, acct.authIndex, signal, logger)
+  } else if (acct.provider === "antigravity") {
+    return queryAntigravity(fetchImpl, baseUrl, mgmtKey, acct, signal, logger)
   }
   return { metrics: [], error: `unknown provider: ${acct.provider}`, errorKind: "unknown", retryable: false }
 }
@@ -375,6 +385,7 @@ async function apiCall(
   fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string,
   authIndex: string, method: string, url: string, headers: Record<string, string>,
   signal: AbortSignal, logger: Logger,
+  data?: string,
 ): Promise<ApiCallResult> {
   const target = new URL(url)
   const startedAt = performance.now()
@@ -384,7 +395,7 @@ async function apiCall(
     res = await fetchImpl(`${baseUrl}/v0/management/api-call`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${mgmtKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ auth_index: authIndex, method, url, header: headers }),
+      body: JSON.stringify({ auth_index: authIndex, method, url, header: headers, ...(data !== undefined ? { data } : {}) }),
       signal,
     })
   } catch (error) {
@@ -504,6 +515,82 @@ async function queryCodex(
     }
     if (metrics.length === 0) return { metrics: [], error: "no quota windows parsed", errorKind: "no-data", retryable: false }
     return { metrics }
+  } catch {
+    return { metrics: [], error: "parse error", errorKind: "parse-error", retryable: false }
+  }
+}
+
+function antigravityProject(file: Record<string, unknown>): string | undefined {
+  for (const source of [file, file.metadata, file.attributes, file.installed, file.web]) {
+    if (!source || typeof source !== "object") continue
+    const record = source as Record<string, unknown>
+    for (const key of ["project_id", "projectId", "gemini_virtual_project"]) {
+      const value = record[key]
+      if (typeof value === "string" && value.trim()) return value.trim()
+    }
+  }
+  return undefined
+}
+
+async function queryAntigravity(
+  fetchImpl: typeof fetch, baseUrl: string, mgmtKey: string, acct: FilteredAccount,
+  signal: AbortSignal, logger: Logger,
+): Promise<AccountQueryResult> {
+  const file = acct.authFile ?? {}
+  let project = antigravityProject(file)
+  if (!project && file.name) {
+    const response = await fetchImpl(`${baseUrl}/v0/management/auth-files/download?name=${encodeURIComponent(file.name)}`, {
+      headers: { Authorization: `Bearer ${mgmtKey}` }, signal,
+    })
+    if (!response.ok) {
+      return { metrics: [], error: `auth-file download failed (${response.status})`,
+        errorKind: response.status === 401 || response.status === 403 ? "mgmt-auth" : "upstream-error",
+        retryable: isRetryableStatus(response.status) }
+    }
+    try {
+      const downloaded = await response.json()
+      if (downloaded && typeof downloaded === "object") project = antigravityProject(downloaded)
+    } catch {
+      return { metrics: [], error: "invalid auth-file JSON", errorKind: "parse-error", retryable: false }
+    }
+  }
+  if (!project) return { metrics: [], error: "Antigravity project_id missing", errorKind: "no-data", retryable: false }
+
+  const result = await apiCall(fetchImpl, baseUrl, mgmtKey, acct.authIndex, "POST",
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary", {
+      Authorization: "Bearer $TOKEN$", "Content-Type": "application/json",
+      "User-Agent": "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)",
+    }, signal, logger, JSON.stringify({ project }))
+  if (!result.ok) return { metrics: [], error: result.error, errorKind: result.errorKind, retryable: result.retryable }
+  const upstreamErr = classifyUpstreamStatus(result.statusCode)
+  if (upstreamErr) return upstreamErr
+  try {
+    const parsed = JSON.parse(result.body)
+    const metrics: NormalizedMetric[] = []
+    for (const [groupIndex, group] of (Array.isArray(parsed?.groups) ? parsed.groups : []).entries()) {
+      if (!group || typeof group !== "object") continue
+      const groupLabel = String(group.displayName ?? group.display_name ?? `Quota Group ${groupIndex + 1}`)
+      for (const [bucketIndex, bucket] of (Array.isArray(group.buckets) ? group.buckets : []).entries()) {
+        if (!bucket || typeof bucket !== "object") continue
+        const fraction = parseNumber(bucket.remainingFraction ?? bucket.remaining_fraction)
+        if (fraction === undefined || fraction < 0 || fraction > 1) continue
+        const id = String(bucket.bucketId ?? bucket.bucket_id ?? bucket.window ?? bucketIndex)
+        const remaining = fraction * 100
+        const resetAt = bucket.resetTime ?? bucket.reset_time
+        const window = String(bucket.window ?? "").toLowerCase()
+        const duration = ["5h", "five-hour", "five_hour"].includes(window) ? "5h"
+          : ["weekly", "week"].includes(window) ? "7d" : undefined
+        metrics.push({
+          providerMetricId: `antigravity:${acct.authIndex}:${encodeURIComponent(groupLabel)}:${encodeURIComponent(id)}`,
+          label: `${groupLabel} · ${bucket.displayName ?? bucket.display_name ?? id}`,
+          unit: "%", remaining, used: 100 - remaining, limit: 100,
+          sourceValueKind: "gauge-remaining", sourceConfidence: "known",
+          ...(duration ? { window: { kind: "rolling" as const, duration,
+            ...(typeof resetAt === "string" && Number.isFinite(Date.parse(resetAt)) ? { resetAt } : {}) } } : {}),
+        })
+      }
+    }
+    return metrics.length ? { metrics } : { metrics: [], error: "no quota buckets parsed", errorKind: "no-data", retryable: false }
   } catch {
     return { metrics: [], error: "parse error", errorKind: "parse-error", retryable: false }
   }

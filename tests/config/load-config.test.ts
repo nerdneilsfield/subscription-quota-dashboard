@@ -436,6 +436,11 @@ test("dynamicProviderIds references existing provider -> ok", () => {
 
 test("cliproxy queryProviders validates known providers", () => {
   expect(() => loadDashboardConfig({
+    providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k", queryProviders: ["antigravity"] }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).not.toThrow()
+  expect(() => loadDashboardConfig({
     providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k", queryProviders: ["codix"] }],
     subscriptions: [],
     profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],

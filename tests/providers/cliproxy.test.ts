@@ -5,6 +5,39 @@ import type { ProviderRefreshInput } from "../../src/server/providers/types"
 
 type FakeFetch = typeof fetch
 
+test("cliproxy discovers Antigravity and queries grouped quota with project and token substitution", async () => {
+  const raw = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (String(input).endsWith("/auth-files")) return makeResp(200, { files: [
+      { provider: "antigravity", auth_index: "ag1", name: "ag.json", label: "AG account", status: "error", unavailable: true },
+    ] })
+    if (String(input).includes("/download?")) return makeResp(200, { project_id: "project-one" })
+    const request = JSON.parse(String(init?.body))
+    expect(request).toMatchObject({ auth_index: "ag1", method: "POST",
+      url: "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+      header: { Authorization: "Bearer $TOKEN$" }, data: JSON.stringify({ project: "project-one" }) })
+    return makeResp(200, { status_code: 200, body: JSON.stringify({ groups: [{ displayName: "Claude", buckets: [
+      { bucketId: "short", window: "5h", remainingFraction: 0, resetTime: "2026-07-17T05:00:00Z" },
+      { bucketId: "long", window: "weekly", remainingFraction: 0.75 },
+    ] }] }) })
+  }
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.errors).toBeUndefined()
+  expect(result.metrics).toHaveLength(2)
+  expect(result.metrics[0]).toMatchObject({ remaining: 0, used: 100, limit: 100,
+    window: { kind: "rolling", duration: "5h", resetAt: "2026-07-17T05:00:00Z" } })
+  expect(result.metrics[1]).toMatchObject({ remaining: 75, window: { duration: "7d" } })
+  expect(result.dynamicSubscriptions?.[0]?.identity).toMatchObject({ provider: "antigravity", transport: "CLIProxy" })
+})
+
+test("cliproxy Antigravity empty quota preserves prior account metrics", async () => {
+  const raw = async (input: RequestInfo | URL): Promise<Response> => String(input).endsWith("/auth-files")
+    ? makeResp(200, { files: [{ provider: "antigravity", auth_index: "ag1", metadata: { project_id: "p1" } }] })
+    : makeResp(200, { status_code: 200, body: '{"groups":[]}' })
+  const result = await createCliproxyProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.errors?.[0]?.message).toContain("no quota buckets")
+  expect(result.preserveMetricIds).toEqual(["antigravity:ag1:"])
+})
+
 const provider: ProviderAccountConfig = {
   id: "cp-1", type: "cliproxy",
   baseUrl: "http://localhost:8317", apiKey: "mgmt-key",

@@ -74,3 +74,32 @@ test("openrouter network error retryable", async () => {
   const result = await createOpenrouterProvider(raw as unknown as FakeFetch).refresh(buildInput())
   expect(result.errors![0]!.retryable).toBe(true)
 })
+
+test("openrouter ordinary key uses remaining limit, not lifetime usage", async () => {
+  const calls: string[] = []
+  const raw = async (input: RequestInfo | URL): Promise<Response> => {
+    calls.push(String(input))
+    return calls.length === 1 ? makeResp(403, {})
+      : makeResp(200, { data: { limit: 20, limit_remaining: 15, usage: 200, limit_reset: "monthly" } })
+  }
+  const result = await createOpenrouterProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(calls).toEqual(["https://openrouter.ai/api/v1/credits", "https://openrouter.ai/api/v1/key"])
+  expect(result.metrics[0]).toMatchObject({ limit: 20, remaining: 15, used: 5 })
+  expect(result.metrics[0]!.notes).toContain("not account balance")
+})
+
+test("openrouter unlimited key does not invent a zero balance", async () => {
+  const raw = async (input: RequestInfo | URL): Promise<Response> => String(input).endsWith("/credits")
+    ? makeResp(403, {}) : makeResp(200, { data: { limit: null, limit_remaining: null, usage: 12 } })
+  const result = await createOpenrouterProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.metrics[0]).toMatchObject({ used: 12, sourceValueKind: "gauge-used" })
+  expect(result.metrics[0]!.remaining).toBeUndefined()
+  expect(result.metrics[0]!.limit).toBeUndefined()
+})
+
+test("openrouter malformed success does not invent credits", async () => {
+  const raw = async (): Promise<Response> => makeResp(200, { data: {} })
+  const result = await createOpenrouterProvider(raw as unknown as FakeFetch).refresh(buildInput())
+  expect(result.metrics).toEqual([])
+  expect(result.errors?.[0]?.message).toContain("invalid credits")
+})

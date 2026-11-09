@@ -106,7 +106,11 @@ cookies; it receives only the UI-ready dashboard payload for its selected
 subscriptions.
 
 Dynamic CLIProxy accounts are opt-in per profile through
-`dynamicProviderIds`. Only CLIProxy providers support dynamic discovery.
+`dynamicProviderIds`. CLIProxy and gpt-load providers support dynamic
+discovery. A gpt-load provider needs the gpt-load admin token (the web-UI
+management password): gpt-load access keys are not allowed to list groups or
+credentials. The provider ID must be listed in `dynamicProviderIds` of at
+least one profile, otherwise the scheduler skips it.
 
 ## 6. Key rotation
 
@@ -132,7 +136,7 @@ docker logs --tail 100 subscription-quota-dashboard
 
 The loader rejects duplicate profile IDs, missing view keys, unknown
 subscription references, duplicate dynamic provider IDs, and dynamic provider
-IDs that do not reference CLIProxy providers.
+IDs that do not reference a dynamic-discovery (CLIProxy or gpt-load) provider.
 
 For a container deployment, mount the reviewed config read-only at
 `/app/config/dashboard.config.ts` or build a new image. Never mount the env

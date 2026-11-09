@@ -434,6 +434,51 @@ test("dynamicProviderIds references existing provider -> ok", () => {
   expect(config.profiles.get("self")?.dynamicProviderIds).toEqual(["cp"])
 })
 
+test("gpt-load requires baseUrl", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "gl", type: "gpt-load" } as never],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).toThrow("baseUrl")
+})
+
+test("gpt-load accepts localhost baseUrl and resolves apiKeyEnv", () => {
+  process.env.GPTLOAD_TEST_KEY = "admin-secret"
+  const config = loadDashboardConfig({
+    providers: [{ id: "gl", type: "gpt-load", baseUrl: "http://localhost:3001", apiKeyEnv: "GPTLOAD_TEST_KEY" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })
+  expect(config.providerRuntime.get("gl")?.available).toBe(true)
+  expect(config.providerRuntime.get("gl")?.apiKey).toBe("admin-secret")
+  delete process.env.GPTLOAD_TEST_KEY
+})
+
+test("gpt-load rejects non-loopback private IP (SSRF)", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "gl", type: "gpt-load", baseUrl: "http://192.168.1.10:3001", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [] }],
+  })).toThrow("private")
+})
+
+test("dynamicProviderIds accepts gpt-load provider", () => {
+  const config = loadDashboardConfig({
+    providers: [{ id: "gl", type: "gpt-load", baseUrl: "http://localhost:3001", apiKey: "k" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [], dynamicProviderIds: ["gl"] }],
+  })
+  expect(config.profiles.get("self")?.dynamicProviderIds).toEqual(["gl"])
+})
+
+test("dynamicProviderIds rejects non-dynamic provider", () => {
+  expect(() => loadDashboardConfig({
+    providers: [{ id: "m", type: "manual" }],
+    subscriptions: [],
+    profiles: [{ id: "self", name: "P", viewKey: "k", subscriptionIds: [], dynamicProviderIds: ["m"] }],
+  })).toThrow("dynamic discovery")
+})
+
 test("cliproxy queryProviders validates known providers", () => {
   expect(() => loadDashboardConfig({
     providers: [{ id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k", queryProviders: ["antigravity"] }],

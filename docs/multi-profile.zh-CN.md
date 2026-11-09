@@ -103,8 +103,11 @@ Subscription 可复用。两个 profile 都列出同一个 subscription ID 时�
 Provider credential 始终留在 server 端。Profile 不会收到 raw API key 或 cookie，
 只收到所选 subscription 的 UI-ready dashboard payload。
 
-CLIProxy dynamic account 通过 profile 的 `dynamicProviderIds` 单独启用。只有
-CLIProxy provider 支持 dynamic discovery。
+CLIProxy dynamic account 通过 profile 的 `dynamicProviderIds` 单独启用。
+CLIProxy 与 gpt-load provider 支持 dynamic discovery。gpt-load provider 需要
+gpt-load admin token（Web UI 管理密码）：gpt-load access key 无权列出 groups 或
+credentials。provider ID 必须列入至少一个 profile 的 `dynamicProviderIds`，
+否则调度器不会刷新它。
 
 ## 6. Key 轮换
 
@@ -128,7 +131,8 @@ docker logs --tail 100 subscription-quota-dashboard
 ```
 
 Loader 会拒绝：重复 profile ID、缺失 view key、未知 subscription 引用、重复
-dynamic provider ID，以及不指向 CLIProxy provider 的 dynamic provider ID。
+dynamic provider ID，以及不指向 dynamic-discovery（CLIProxy 或 gpt-load）
+provider 的 dynamic provider ID。
 
 容器部署时，将审核后的 config 只读挂载到
 `/app/config/dashboard.config.ts`，或重建 image。不要把 env file 挂到公开 web path。

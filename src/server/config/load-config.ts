@@ -346,6 +346,17 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
       if (reason !== undefined) state.reason = reason
       providers.set(provider.id, provider)
       providerRuntime.set(provider.id, state)
+    } else if (provider.type === "gpt-load") {
+      if (!provider.baseUrl) {
+        fail(`${providerPath}.baseUrl`, "gpt-load requires baseUrl")
+      }
+      validateBaseUrlSkipLoopback(provider.baseUrl, `${providerPath}.baseUrl`)
+      const { apiKey, reason } = resolveBearerCredential(provider as { apiKeyEnv?: string | undefined; apiKey?: string | undefined })
+      const state: ProviderRuntimeState = { available: apiKey !== undefined }
+      if (apiKey !== undefined) state.apiKey = apiKey
+      if (reason !== undefined) state.reason = reason
+      providers.set(provider.id, provider)
+      providerRuntime.set(provider.id, state)
     } else if (API_KEY_PROVIDER_TYPES.has(provider.type)) {
       // Validate baseUrl for providers that accept it
       if ("baseUrl" in provider && provider.baseUrl !== undefined) {
@@ -459,10 +470,10 @@ export function loadDashboardConfig(input: DashboardConfigInput): NormalizedConf
       }
       seenDynIds.add(dynProviderId)
       const referenced = providers.get(dynProviderId)
-      if (referenced !== undefined && referenced.type !== "cliproxy") {
+      if (referenced !== undefined && referenced.type !== "cliproxy" && referenced.type !== "gpt-load") {
         fail(
           `profiles[${profile.id}].dynamicProviderIds`,
-          `provider "${dynProviderId}" is not a cliproxy provider (only cliproxy supports dynamic discovery)`,
+          `provider "${dynProviderId}" is not a dynamic-discovery provider (only cliproxy and gpt-load support dynamic discovery)`,
         )
       }
     }

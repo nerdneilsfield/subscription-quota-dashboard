@@ -57,6 +57,7 @@ export type ProviderAccountConfig =
   | { id: string; type: "command-code"; sessionCookieEnv?: string | undefined; sessionCookie?: string | undefined }
   | { id: string; type: "opencode-go"; workspaceIdEnv?: string | undefined; workspaceId?: string | undefined; authCookieEnv?: string | undefined; authCookie?: string | undefined }
   | { id: string; type: "cliproxy"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined; queryProviders?: string[] | undefined }
+  | { id: string; type: "gpt-load"; baseUrl: string; apiKeyEnv?: string | undefined; apiKey?: string | undefined }
 
 export type SubscriptionConfig = {
   id: string

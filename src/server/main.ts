@@ -19,6 +19,7 @@ import { createMiniMaxProvider } from "./providers/minimax"
 import { createZenmuxProvider } from "./providers/zenmux"
 import { createVolcengineProvider } from "./providers/volcengine"
 import { createCliproxyProvider } from "./providers/cliproxy"
+import { createGptLoadProvider } from "./providers/gpt-load"
 import { createOpenCodeGoProvider } from "./providers/opencode-go"
 import { createMiMoTokenPlanProvider } from "./providers/mimo-token-plan"
 import { createCommandCodeProvider } from "./providers/command-code"
@@ -112,6 +113,7 @@ async function main(): Promise<void> {
     ["command-code", createCommandCodeProvider(loggedFetch)],
     ["opencode-go", createOpenCodeGoProvider(loggedFetch)],
     ["cliproxy", createCliproxyProvider(loggedFetch)],
+    ["gpt-load", createGptLoadProvider(loggedFetch)],
   ])
 
   const { secret: sessionSecret, generated: generatedSessionSecret } = resolveSessionSecret(

@@ -30,6 +30,14 @@ const config: DashboardConfigInput = {
     { id: "cliproxy-main", type: "cliproxy",
       baseUrl: process.env.CLIPROXY_BASE_URL ?? "http://localhost:8317",
       apiKeyEnv: "CLIPROXY_MGMT_KEY" },
+    // --- Dynamic provider (auto-discovers gpt-load subscription accounts) ---
+    // Use the gpt-load admin token (web-UI management password) as the key;
+    // gpt-load access keys cannot list groups/credentials. Remember to also
+    // add "gpt-load-main" to a profile's dynamicProviderIds, otherwise the
+    // scheduler never refreshes it.
+    // { id: "gpt-load-main", type: "gpt-load",
+    //   baseUrl: process.env.GPTLOAD_BASE_URL ?? "http://localhost:3001",
+    //   apiKeyEnv: "GPTLOAD_ADMIN_TOKEN" },
   ],
   subscriptions: [
     // Add "command-code" to the desired profile's subscriptionIds when enabling.

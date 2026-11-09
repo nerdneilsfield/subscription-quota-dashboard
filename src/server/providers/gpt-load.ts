@@ -256,7 +256,7 @@ async function collectGroup(
         id: `gpt-load:${group.id}:unavailable`,
         name: group.name?.trim() || providerLabel,
         providerMetricIds: [metric.providerMetricId],
-        identity: { provider: "gpt-load", providerLabel, transport: "GPT Load" },
+        identity: { provider: channel, providerLabel, transport: "GPT Load" },
         ui: { group: providerLabel },
       }],
       failedPrefixes: [],
@@ -439,7 +439,11 @@ function makeDynSub(
     name: providerLabel,
     providerMetricIds,
     identity: {
-      provider: "gpt-load",
+      // channel (codex/claude/xai/...) rather than "gpt-load": the projection
+      // layer dedupes by account:<provider>:<account>, and sharing the
+      // upstream vocabulary with cliproxy collapses the same account seen on
+      // both platforms into one card.
+      provider: channel,
       providerLabel,
       ...(account ? { account } : {}),
       ...(planName || planLevel ? { plan: [planName, planLevel].filter(Boolean).join(" ") } : {}),

@@ -391,7 +391,7 @@ function subscriptionAliases(
   // identical accounts exposed by two configurations of the same upstream.
   if (provider) {
     for (const metric of metrics) {
-      const authIndex = cliproxyAuthIndex(metric.providerMetricId, provider)
+      const authIndex = dynamicAccountKey(metric, provider)
       if (authIndex) aliases.add(`auth:${provider}:${normalizeAccount(authIndex)}`)
     }
 
@@ -420,10 +420,16 @@ function subscriptionProvider(metric: ProjectedMetric): string | undefined {
   return metric.providerMetricId.split(":", 1)[0]?.trim().toLowerCase() || undefined
 }
 
-function cliproxyAuthIndex(providerMetricId: string, provider: string): string | undefined {
-  const [metricProvider, authIndex] = providerMetricId.split(":", 3)
-  if (!metricProvider || !authIndex || normalizeAccount(metricProvider) !== provider) return undefined
-  return authIndex
+// Stable per-account key for dynamically discovered metrics. cliproxy metric
+// IDs are {provider}:{authIndex}:{window}; gpt-load metric IDs are
+// {channel}:{groupId}:{credentialId}:{window} and need both ID segments - the
+// groupId alone is shared by every credential in a group and would wrongly
+// collapse distinct accounts into one card.
+function dynamicAccountKey(metric: ProjectedMetric, provider: string): string | undefined {
+  const [metricProvider, second, third] = metric.providerMetricId.split(":", 4)
+  if (!metricProvider || second === undefined || normalizeAccount(metricProvider) !== provider) return undefined
+  if (metric.providerType === "gpt-load") return third === undefined ? undefined : `${second}:${third}`
+  return second
 }
 
 function normalizeAccount(value: string): string {

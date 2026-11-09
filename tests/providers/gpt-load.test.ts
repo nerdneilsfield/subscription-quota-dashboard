@@ -93,7 +93,7 @@ test("gpt-load discovers groups and maps quota windows to metrics and dynamic su
   expect(codexSub).toMatchObject({
     name: "Codex",
     providerMetricIds: ["codex:3:11:five_hour", "codex:3:11:weekly"],
-    identity: { provider: "gpt-load", providerLabel: "Codex", account: "alice@example.com", plan: "Pro plus", transport: "GPT Load" },
+    identity: { provider: "codex", providerLabel: "Codex", account: "alice@example.com", plan: "Pro plus", transport: "GPT Load" },
     ui: { group: "Codex" },
   })
   expect(result.dynamicSubscriptions).toHaveLength(2)

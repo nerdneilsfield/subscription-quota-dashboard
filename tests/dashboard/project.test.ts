@@ -1044,6 +1044,80 @@ test("deduplicates the same discovered account across upstreams", () => {
   expect(payload.subscriptions[0]!.identity?.account).toBe("Alice@Example.com")
 })
 
+test("deduplicates the same account across cliproxy and gpt-load", () => {
+  const config = makeConfig({
+    providers: [
+      { id: "cp", type: "cliproxy", baseUrl: "http://localhost:8317", apiKey: "k" },
+      { id: "gl", type: "gpt-load", baseUrl: "http://localhost:3001", apiKey: "k" },
+    ],
+    subscriptions: [],
+    profiles: [{
+      id: "self", name: "Personal", viewKey: "k", subscriptionIds: [],
+      dynamicProviderIds: ["cp", "gl"],
+    }],
+  })
+  const dynamicSubscriptions = new Map([
+    ["cp", [{
+      id: "cliproxy:claude:abc123", name: "Claude", providerMetricIds: ["claude:abc123:five_hour"],
+      identity: { provider: "claude", providerLabel: "Claude", account: "alice@example.com", transport: "CLIProxy" },
+    }]],
+    ["gl", [{
+      id: "gpt-load:7:21", name: "Claude", providerMetricIds: ["claude:7:21:five_hour"],
+      identity: { provider: "claude", providerLabel: "Claude", account: "alice@example.com", transport: "GPT Load" },
+    }]],
+  ])
+  const metric = (providerMetricId: string): NormalizedMetric => ({
+    providerMetricId, label: "5h", unit: "%", used: 20, limit: 100,
+    sourceValueKind: "gauge-used", sourceConfidence: "known",
+  })
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW, selectedRange: "24h",
+    providers: [
+      { providerAccountId: "cp", metrics: [metric("claude:abc123:five_hour")], cache: okCache },
+      { providerAccountId: "gl", metrics: [metric("claude:7:21:five_hour")], cache: okCache },
+    ],
+    dynamicSubscriptions,
+  })
+
+  expect(payload.subscriptions).toHaveLength(1)
+  expect(payload.subscriptions[0]!.identity?.account).toBe("alice@example.com")
+})
+
+test("does not collapse distinct gpt-load credentials sharing a group", () => {
+  const config = makeConfig({
+    providers: [
+      { id: "gl", type: "gpt-load", baseUrl: "http://localhost:3001", apiKey: "k" },
+    ],
+    subscriptions: [],
+    profiles: [{
+      id: "self", name: "Personal", viewKey: "k", subscriptionIds: [],
+      dynamicProviderIds: ["gl"],
+    }],
+  })
+  const dynamicSubscriptions = new Map([
+    ["gl", [{
+      id: "gpt-load:7:21", name: "Claude", providerMetricIds: ["claude:7:21:five_hour"],
+      identity: { provider: "claude", providerLabel: "Claude", account: "alice@example.com", transport: "GPT Load" },
+    }, {
+      id: "gpt-load:7:22", name: "Claude", providerMetricIds: ["claude:7:22:five_hour"],
+      identity: { provider: "claude", providerLabel: "Claude", account: "bob@example.com", transport: "GPT Load" },
+    }]],
+  ])
+  const metric = (providerMetricId: string): NormalizedMetric => ({
+    providerMetricId, label: "5h", unit: "%", used: 20, limit: 100,
+    sourceValueKind: "gauge-used", sourceConfidence: "known",
+  })
+  const payload = buildDashboardPayload({
+    config, profileId: "self", generatedAt: NOW, selectedRange: "24h",
+    providers: [
+      { providerAccountId: "gl", metrics: [metric("claude:7:21:five_hour"), metric("claude:7:22:five_hour")], cache: okCache },
+    ],
+    dynamicSubscriptions,
+  })
+
+  expect(payload.subscriptions).toHaveLength(2)
+})
+
 test("deduplicates a discovered account already configured locally", () => {
   const config = makeConfig({
     providers: [
